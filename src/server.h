@@ -73,6 +73,7 @@ struct pss_tty {
 
   int lws_close_status;
   bool intentional_close;
+  bool reattached;
 };
 
 struct server {

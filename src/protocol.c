@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 #include "pty.h"
 #include "server.h"
@@ -13,6 +16,17 @@
 
 // initial message list
 static char initial_cmds[] = {SET_WINDOW_TITLE, SET_PREFERENCES};
+
+static void reattach_sigwinch_cb(uv_timer_t *timer) {
+  pty_process *process = (pty_process *)timer->data;
+#ifndef _WIN32
+  if (process != NULL && process->pid > 0) {
+    pty_resize(process);
+    uv_kill(-process->pid, SIGWINCH);
+  }
+#endif
+  uv_close((uv_handle_t *)timer, (uv_close_cb)free);
+}
 
 static int send_initial_message(struct lws *wsi, int index) {
   unsigned char message[LWS_PRE + 1 + 4096];
@@ -273,6 +287,13 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         if (pss->initial_cmd_index == sizeof(initial_cmds)) {
           pss->initialized = true;
           pty_resume(pss->process);
+          if (pss->reattached && pss->process != NULL) {
+            pss->reattached = false;
+            uv_timer_t *t = xmalloc(sizeof(uv_timer_t));
+            uv_timer_init(server->loop, t);
+            t->data = pss->process;
+            uv_timer_start(t, reattach_sigwinch_cb, 100, 0);
+          }
           break;
         }
         if (send_initial_message(wsi, pss->initial_cmd_index) < 0) {
