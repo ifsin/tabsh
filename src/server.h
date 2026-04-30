@@ -17,6 +17,7 @@
 #define SET_WINDOW_TITLE '1'
 #define SET_PREFERENCES '2'
 #define SET_APP_COMMAND '3'
+#define SET_REATTACHED '4'
 
 // url paths
 struct endpoints {

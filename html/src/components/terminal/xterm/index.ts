@@ -29,6 +29,7 @@ enum Command {
     SET_WINDOW_TITLE = '1',
     SET_PREFERENCES = '2',
     SET_APP_COMMAND = '3',
+    SET_REATTACHED = '4',
 
     // client side
     INPUT = '0',
@@ -104,6 +105,7 @@ export class Xterm {
     private reconnect = true;
     private doReconnect = true;
     private closeOnDisconnect = false;
+    private reattaching = false;
     private audio: HTMLAudioElement;
 
     private writeFunc = (data: ArrayBuffer) => this.writeData(new Uint8Array(data));
@@ -343,7 +345,10 @@ export class Xterm {
         this.socket?.send(textEncoder.encode(msg));
 
         if (this.opened) {
-            terminal.reset();
+            this.reattaching = sessionStorage.getItem('ttyd-session-id') !== null;
+            if (!this.reattaching) {
+                terminal.reset();
+            }
             terminal.options.disableStdin = false;
             overlayAddon.showOverlay('Reconnected', 300);
         } else {
@@ -434,6 +439,10 @@ export class Xterm {
                 break;
             case Command.SET_APP_COMMAND:
                 this.updateUrlParam('app', textDecoder.decode(data).trim());
+                break;
+            case Command.SET_REATTACHED:
+                this.reattaching = false;
+                this.terminal.refresh(0, this.terminal.rows - 1);
                 break;
             case Command.SET_PREFERENCES:
                 this.applyPreferences({

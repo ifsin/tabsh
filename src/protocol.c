@@ -426,6 +426,9 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
           pty_resume(pss->process);
           if (pss->reattached && pss->process != NULL) {
             pss->reattached = false;
+            unsigned char reattach_msg[LWS_PRE + 1];
+            reattach_msg[LWS_PRE] = SET_REATTACHED;
+            lws_write(wsi, &reattach_msg[LWS_PRE], 1, LWS_WRITE_BINARY);
             uv_timer_t *t = xmalloc(sizeof(uv_timer_t));
             uv_timer_init(server->loop, t);
             t->data = pss->process;
