@@ -16,6 +16,7 @@
 #define OUTPUT '0'
 #define SET_WINDOW_TITLE '1'
 #define SET_PREFERENCES '2'
+#define SET_APP_COMMAND '3'
 
 // url paths
 struct endpoints {
@@ -74,6 +75,11 @@ struct pss_tty {
   int lws_close_status;
   bool intentional_close;
   bool reattached;
+
+  uv_timer_t *app_timer;
+  char current_app[512];
+  char pending_app[512];
+  bool pending_app_send;
 };
 
 struct server {

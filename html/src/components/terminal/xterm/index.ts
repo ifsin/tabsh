@@ -28,6 +28,7 @@ enum Command {
     OUTPUT = '0',
     SET_WINDOW_TITLE = '1',
     SET_PREFERENCES = '2',
+    SET_APP_COMMAND = '3',
 
     // client side
     INPUT = '0',
@@ -430,6 +431,9 @@ export class Xterm {
             case Command.SET_WINDOW_TITLE:
                 this.title = textDecoder.decode(data);
                 document.title = this.title;
+                break;
+            case Command.SET_APP_COMMAND:
+                this.updateUrlParam('app', textDecoder.decode(data).trim());
                 break;
             case Command.SET_PREFERENCES:
                 this.applyPreferences({
