@@ -108,7 +108,22 @@ export class Xterm {
     private writeFunc = (data: ArrayBuffer) => this.writeData(new Uint8Array(data));
 
     private static generateSessionId(): string {
-        return crypto.randomUUID();
+        const key = 'ttyd-session-id';
+        const stored = sessionStorage.getItem(key);
+        if (stored) return stored;
+        const id = crypto.randomUUID();
+        sessionStorage.setItem(key, id);
+        return id;
+    }
+
+    private updateUrlParam(key: string, value: string) {
+        const url = new URL(window.location.href);
+        if (value && value !== '') {
+            url.searchParams.set(key, value);
+        } else {
+            url.searchParams.delete(key);
+        }
+        window.history.replaceState(null, '', url.toString());
     }
 
     constructor(
@@ -183,6 +198,15 @@ export class Xterm {
 
         terminal.open(parent);
         fitAddon.fit();
+
+        terminal.parser.registerOscHandler(7, data => {
+            try {
+                this.updateUrlParam('cwd', new URL(data).pathname);
+            } catch (_) {
+                // ignore malformed OSC 7 data
+            }
+            return true;
+        });
 
         terminal.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
             if (ev.type !== 'keydown') return true;
