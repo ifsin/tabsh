@@ -13,10 +13,6 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
-#else
-#include <psapi.h>
-#include <tlhelp32.h>
-#include <windows.h>
 #endif
 
 #include "pty.h"
@@ -28,6 +24,16 @@
 static char initial_cmds[] = {SET_WINDOW_TITLE, SET_PREFERENCES};
 
 #ifndef _WIN32
+static bool is_shell(const char *argv0) {
+  const char *name = strrchr(argv0, '/');
+  name = name ? name + 1 : argv0;
+  const char *shells[] = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh", NULL};
+  for (int i = 0; shells[i] != NULL; i++) {
+    if (strcmp(name, shells[i]) == 0) return true;
+  }
+  return false;
+}
+
 static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   out[0] = '\0';
 #ifdef __APPLE__
@@ -40,6 +46,7 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   char *end = buf + buf_size;
   p += strnlen(p, (size_t)(end - p)) + 1;
   while (p < end && *p == '\0') p++;
+  if (argc > 0 && is_shell(p)) return;
   size_t written = 0;
   for (int i = 0; i < argc && p < end && written < out_len - 1; i++) {
     if (i > 0 && written < out_len - 1) out[written++] = ' ';
@@ -58,6 +65,7 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   ssize_t n = read(fd, buf, sizeof(buf) - 1);
   close(fd);
   if (n <= 0) return;
+  if (is_shell(buf)) return;
   size_t written = 0;
   for (ssize_t i = 0; i < n && written < out_len - 1; i++) {
     out[written++] = buf[i] == '\0' ? ' ' : buf[i];
@@ -81,67 +89,6 @@ static void app_detect_cb(uv_timer_t *timer) {
     pid_t fgpid = tcgetpgrp(pss->process->pty);
     if (fgpid > 0) get_process_argv(fgpid, app, sizeof(app));
   }
-
-  if (strcmp(app, pss->current_app) != 0) {
-    strncpy(pss->current_app, app, sizeof(pss->current_app) - 1);
-    pss->current_app[sizeof(pss->current_app) - 1] = '\0';
-    strncpy(pss->pending_app, app, sizeof(pss->pending_app) - 1);
-    pss->pending_app[sizeof(pss->pending_app) - 1] = '\0';
-    pss->pending_app_send = true;
-    lws_callback_on_writable(pss->wsi);
-  }
-}
-#else
-static bool is_shell(const char *name) {
-  const char *shells[] = {"cmd.exe", "powershell.exe", "pwsh.exe", "bash.exe", "zsh.exe", "sh.exe", NULL};
-  for (int i = 0; shells[i] != NULL; i++) {
-    if (_stricmp(name, shells[i]) == 0) return true;
-  }
-  return false;
-}
-
-static void get_child_app(DWORD parent_pid, char *out, size_t out_len) {
-  out[0] = '\0';
-  HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (hSnap == INVALID_HANDLE_VALUE) return;
-
-  PROCESSENTRY32 pe;
-  pe.dwSize = sizeof(pe);
-  DWORD child_pid = 0;
-
-  if (Process32First(hSnap, &pe)) {
-    do {
-      if (pe.th32ParentProcessID == parent_pid && !is_shell(pe.szExeFile)) {
-        child_pid = pe.th32ProcessID;
-        break;
-      }
-    } while (Process32Next(hSnap, &pe));
-  }
-  CloseHandle(hSnap);
-
-  if (child_pid == 0) return;
-
-  HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, child_pid);
-  if (hProc == NULL) return;
-
-  char path[MAX_PATH];
-  DWORD path_len = MAX_PATH;
-  if (QueryFullProcessImageNameA(hProc, 0, path, &path_len)) {
-    char *name = strrchr(path, '\\');
-    strncpy(out, name ? name + 1 : path, out_len - 1);
-    out[out_len - 1] = '\0';
-    char *ext = strrchr(out, '.');
-    if (ext && _stricmp(ext, ".exe") == 0) *ext = '\0';
-  }
-  CloseHandle(hProc);
-}
-
-static void app_detect_cb(uv_timer_t *timer) {
-  struct pss_tty *pss = (struct pss_tty *)timer->data;
-  if (pss == NULL || pss->process == NULL || pss->wsi == NULL) return;
-
-  char app[512] = {0};
-  get_child_app((DWORD)pss->process->pid, app, sizeof(app));
 
   if (strcmp(app, pss->current_app) != 0) {
     strncpy(pss->current_app, app, sizeof(pss->current_app) - 1);
@@ -434,10 +381,12 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             t->data = pss->process;
             uv_timer_start(t, reattach_sigwinch_cb, 100, 0);
           }
+#ifndef _WIN32
           pss->app_timer = xmalloc(sizeof(uv_timer_t));
           uv_timer_init(server->loop, pss->app_timer);
           pss->app_timer->data = pss;
           uv_timer_start(pss->app_timer, app_detect_cb, 200, 200);
+#endif
           break;
         }
         if (send_initial_message(wsi, pss->initial_cmd_index) < 0) {
@@ -455,6 +404,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         return 1;
       }
 
+#ifndef _WIN32
       if (pss->pending_app_send) {
         pss->pending_app_send = false;
         size_t app_len = strlen(pss->pending_app);
@@ -465,6 +415,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         lws_write(wsi, p, 1 + app_len, LWS_WRITE_BINARY);
         free(msg);
       }
+#endif
 
       if (pss->pty_buf != NULL) {
         wsi_output(wsi, pss->pty_buf);
@@ -588,11 +539,13 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       lwsl_notice("WS closed from %s, clients: %d\n", pss->address, server->client_count);
       if (pss->buffer != NULL) free(pss->buffer);
       if (pss->pty_buf != NULL) pty_buf_free(pss->pty_buf);
+#ifndef _WIN32
       if (pss->app_timer != NULL) {
         uv_timer_stop(pss->app_timer);
         uv_close((uv_handle_t *)pss->app_timer, (uv_close_cb)free);
         pss->app_timer = NULL;
       }
+#endif
       for (int i = 0; i < pss->argc; i++) {
         free(pss->args[i]);
       }
