@@ -250,7 +250,8 @@ static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t 
   pty_process *process = process_init(NULL, server->loop, build_args(pss), build_env(pss));
   session_t *session = session_create(session_id, process, pss);
   process->ctx = (void *)session;
-  if (server->cwd != NULL) process->cwd = strdup(server->cwd);
+  const char *cwd = pss->cwd ? pss->cwd : server->cwd;
+  if (cwd != NULL) process->cwd = strdup(cwd);
   if (columns > 0) process->columns = columns;
   if (rows > 0) process->rows = rows;
   if (pty_spawn(process, process_read_cb, process_exit_cb) != 0) {
@@ -513,6 +514,13 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             break;
           }
 
+          struct json_object *cwd_obj = NULL;
+          if (json_object_object_get_ex(obj, "cwd", &cwd_obj)) {
+            const char *cwd_str = json_object_get_string(cwd_obj);
+            if (cwd_str != NULL && strlen(cwd_str) > 0)
+              pss->cwd = strdup(cwd_str);
+          }
+
           if (!spawn_process(pss, client_session_id, columns, rows)) {
             json_object_put(obj);
             return 1;
@@ -539,6 +547,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       lwsl_notice("WS closed from %s, clients: %d\n", pss->address, server->client_count);
       if (pss->buffer != NULL) free(pss->buffer);
       if (pss->pty_buf != NULL) pty_buf_free(pss->pty_buf);
+      if (pss->cwd != NULL) { free(pss->cwd); pss->cwd = NULL; }
 #ifndef _WIN32
       if (pss->app_timer != NULL) {
         uv_timer_stop(pss->app_timer);

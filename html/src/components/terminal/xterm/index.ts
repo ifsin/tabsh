@@ -127,6 +127,71 @@ export class Xterm {
             url.searchParams.delete(key);
         }
         window.history.replaceState(null, '', url.toString());
+        this.setMetaProperty('og:url', url.toString());
+        this.updateMeta(`ttyd-${key}`, value);
+    }
+
+    private updateCwdPath(cwd: string) {
+        const base = window.location.pathname.replace(/\/dir\/.*/, '').replace(/\/$/, '');
+        const url = new URL(window.location.href);
+        url.pathname = `${base}/dir${cwd}`;
+        window.history.replaceState(null, '', url.toString());
+        this.setMetaProperty('og:url', url.toString());
+        this.updateMeta('ttyd-cwd', cwd);
+    }
+
+    private static parseCwdFromPath(): string | null {
+        const match = window.location.pathname.match(/\/dir(\/.*)/);
+        return match ? decodeURIComponent(match[1]) : null;
+    }
+
+    private updateMeta(name: string, value: string) {
+        let el = document.querySelector(`meta[name="${name}"]`) as HTMLMetaElement;
+        if (!el) {
+            el = document.createElement('meta');
+            el.name = name;
+            document.head.appendChild(el);
+        }
+        el.content = value ?? '';
+
+        if (name === 'ttyd-title') {
+            this.setMetaProperty('og:title', value);
+            this.setMetaProperty('og:description', this.buildDescription());
+            this.setMetaName('description', this.buildDescription());
+        }
+        if (name === 'ttyd-app' || name === 'ttyd-cwd') {
+            this.setMetaProperty('og:description', this.buildDescription());
+            this.setMetaName('description', this.buildDescription());
+        }
+    }
+
+    private setMetaName(name: string, value: string) {
+        let el = document.querySelector(`meta[name="${name}"]`) as HTMLMetaElement;
+        if (!el) {
+            el = document.createElement('meta');
+            el.name = name;
+            document.head.appendChild(el);
+        }
+        el.content = value;
+    }
+
+    private setMetaProperty(property: string, value: string) {
+        let el = document.querySelector(`meta[property="${property}"]`) as HTMLMetaElement;
+        if (!el) {
+            el = document.createElement('meta');
+            el.setAttribute('property', property);
+            document.head.appendChild(el);
+        }
+        el.content = value;
+    }
+
+    private buildDescription(): string {
+        const parts: string[] = [];
+        const app = (document.querySelector('meta[name="ttyd-app"]') as HTMLMetaElement)?.content;
+        const cwd = (document.querySelector('meta[name="ttyd-cwd"]') as HTMLMetaElement)?.content;
+        if (app) parts.push(`app: ${app}`);
+        if (cwd) parts.push(`cwd: ${cwd}`);
+        return parts.length > 0 ? parts.join(', ') : 'Terminal session';
     }
 
     constructor(
@@ -204,7 +269,7 @@ export class Xterm {
 
         terminal.parser.registerOscHandler(7, data => {
             try {
-                this.updateUrlParam('cwd', new URL(data).pathname);
+                this.updateCwdPath(new URL(data).pathname);
             } catch (_) {
                 // ignore malformed OSC 7 data
             }
@@ -239,6 +304,7 @@ export class Xterm {
             terminal.onTitleChange(data => {
                 if (data && data !== '' && !this.titleFixed) {
                     document.title = this.title ? data + ' | ' + this.title : data;
+                    this.updateMeta('ttyd-title', document.title);
                 }
             })
         );
@@ -341,6 +407,7 @@ export class Xterm {
             columns: terminal.cols,
             rows: terminal.rows,
             sessionId: this.sessionId,
+            ...(Xterm.parseCwdFromPath() ? { cwd: Xterm.parseCwdFromPath() } : {}),
         });
         this.socket?.send(textEncoder.encode(msg));
 
@@ -436,6 +503,7 @@ export class Xterm {
             case Command.SET_WINDOW_TITLE:
                 this.title = textDecoder.decode(data);
                 document.title = this.title;
+                this.updateMeta('ttyd-title', this.title);
                 break;
             case Command.SET_APP_COMMAND:
                 this.updateUrlParam('app', textDecoder.decode(data).trim());
@@ -526,6 +594,7 @@ export class Xterm {
                     console.log(`[ttyd] setting fixed title: ${value}`);
                     this.titleFixed = value;
                     document.title = value;
+                    this.updateMeta('ttyd-title', value);
                     break;
                 case 'isWindows':
                     if (value) console.log('[ttyd] is windows');

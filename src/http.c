@@ -168,7 +168,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         goto try_to_reuse;
       }
 
-      if (strcmp(pss->path, endpoints.index) != 0) {
+      if (strncmp(pss->path, endpoints.index, strlen(endpoints.index)) != 0) {
         lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
         goto try_to_reuse;
       }

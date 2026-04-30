@@ -73,6 +73,7 @@ struct pss_tty {
   pty_buf_t *pty_buf;
   session_t *session;
 
+  char *cwd;
   int lws_close_status;
   bool intentional_close;
   bool reattached;
