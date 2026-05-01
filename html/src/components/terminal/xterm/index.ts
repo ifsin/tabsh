@@ -51,6 +51,7 @@ export interface ClientOptions {
     enableSixel: boolean;
     titleFixed?: string;
     isWindows: boolean;
+    homeDir?: string;
     trzszDragInitTimeout: number;
     unicodeVersion: string;
     closeOnDisconnect: boolean;
@@ -99,8 +100,10 @@ export class Xterm {
     private token: string;
     private sessionId: string;
     private opened = false;
-    private title?: string;
     private titleFixed?: string;
+    private homeDir?: string;
+    private currentCwd?: string;
+    private currentTitle?: string;
     private resizeOverlay = true;
     private reconnect = true;
     private doReconnect = true;
@@ -138,6 +141,29 @@ export class Xterm {
         window.history.replaceState(null, '', url.toString());
         this.setMetaProperty('og:url', url.toString());
         this.updateMeta('ttyd-cwd', cwd);
+    }
+
+    private formatCwdTitle(cwd: string): string {
+        if (this.options.clientOptions.isWindows) {
+            const segments = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
+            if (segments.length <= 1) return cwd;
+            return `${segments[segments.length - 1]}  ${segments.slice(0, -1).join('\\')}`;
+        }
+
+        const withTilde = this.homeDir && cwd.startsWith(this.homeDir) ? '~' + cwd.slice(this.homeDir.length) : cwd;
+
+        const segments = withTilde
+            .replace(/\/$/, '')
+            .split('/')
+            .filter(s => s !== '');
+        if (segments.length === 0) return withTilde || '/';
+        if (segments.length === 1) return withTilde;
+
+        const currentDir = segments[segments.length - 1];
+        const parentPath = withTilde.startsWith('~')
+            ? '~/' + segments.slice(1, -1).join('/')
+            : '/' + segments.slice(0, -1).join('/');
+        return `${currentDir}  ${parentPath}`;
     }
 
     private static parseCwdFromPath(): string | null {
@@ -269,9 +295,16 @@ export class Xterm {
 
         terminal.parser.registerOscHandler(7, data => {
             try {
-                this.updateCwdPath(new URL(data).pathname);
+                const cwd = new URL(data).pathname;
+                this.currentCwd = cwd;
+                this.updateCwdPath(cwd);
+                if (!this.titleFixed) {
+                    const cwdFormatted = this.formatCwdTitle(cwd);
+                    document.title = this.currentTitle ? `${this.currentTitle} | ${cwdFormatted}` : cwdFormatted;
+                    this.updateMeta('ttyd-title', document.title);
+                }
             } catch (_) {
-                // ignore malformed OSC 7 data
+                /* malformed OSC 7 */
             }
             return true;
         });
@@ -303,7 +336,8 @@ export class Xterm {
         register(
             terminal.onTitleChange(data => {
                 if (data && data !== '' && !this.titleFixed) {
-                    document.title = this.title ? data + ' | ' + this.title : data;
+                    this.currentTitle = data;
+                    document.title = this.currentCwd ? `${data} | ${this.formatCwdTitle(this.currentCwd)}` : data;
                     this.updateMeta('ttyd-title', document.title);
                 }
             })
@@ -500,11 +534,6 @@ export class Xterm {
             case Command.OUTPUT:
                 this.writeFunc(data);
                 break;
-            case Command.SET_WINDOW_TITLE:
-                this.title = textDecoder.decode(data);
-                document.title = this.title;
-                this.updateMeta('ttyd-title', this.title);
-                break;
             case Command.SET_APP_COMMAND:
                 this.updateUrlParam('app', textDecoder.decode(data).trim());
                 break;
@@ -595,6 +624,9 @@ export class Xterm {
                     this.titleFixed = value;
                     document.title = value;
                     this.updateMeta('ttyd-title', value);
+                    break;
+                case 'homeDir':
+                    if (value) this.homeDir = value;
                     break;
                 case 'isWindows':
                     if (value) console.log('[ttyd] is windows');

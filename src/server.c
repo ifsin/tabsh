@@ -347,7 +347,12 @@ int main(int argc, char **argv) {
 
 #ifdef _WIN32
   json_object_object_add(client_prefs, "isWindows", json_object_new_boolean(true));
+  const char *home_dir = getenv("USERPROFILE");
+#else
+  const char *home_dir = getenv("HOME");
 #endif
+  if (home_dir != NULL)
+    json_object_object_add(client_prefs, "homeDir", json_object_new_string(home_dir));
 
   // parse command line options
   int c;

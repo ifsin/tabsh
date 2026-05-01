@@ -21,7 +21,7 @@
 #include "compat.h"
 
 // initial message list
-static char initial_cmds[] = {SET_WINDOW_TITLE, SET_PREFERENCES};
+static char initial_cmds[] = {SET_PREFERENCES};
 
 #ifndef _WIN32
 static bool is_shell(const char *argv0) {
@@ -119,9 +119,6 @@ static int send_initial_message(struct lws *wsi, int index) {
 
   char cmd = initial_cmds[index];
   switch (cmd) {
-    case SET_WINDOW_TITLE:
-      n = snprintf((char *)p, 1 + 4096, "%c", cmd);
-      break;
     case SET_PREFERENCES:
       n = snprintf((char *)p, 1 + 4096, "%c%s", cmd, server->prefs_json);
       break;
