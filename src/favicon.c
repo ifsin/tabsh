@@ -68,6 +68,7 @@ static bool resolve_binary_formula(const char *binary, char *formula, size_t for
     ssize_t n = readlink(link_path, target, sizeof(target) - 1);
     if (n <= 0) continue;
     target[n] = '\0';
+
     char *seg = strstr(target, "/Cellar/");
     size_t skip = 8;
     if (!seg) { seg = strstr(target, "/Caskroom/"); skip = 10; }
@@ -80,6 +81,7 @@ static bool resolve_binary_formula(const char *binary, char *formula, size_t for
     if (flen >= formula_len) continue;
     strncpy(formula, seg, flen);
     formula[flen] = '\0';
+
     return true;
   }
   return false;
@@ -113,13 +115,17 @@ bool favicon_resolve_formula(const char *app, char *formula, size_t formula_len)
   for (int i = ntokens - 1; i >= 0; i--) {
     if (strchr(tokens[i], '/') == NULL) continue;
     const char *name = strrchr(tokens[i], '/') + 1;
+
     if (resolve_binary_formula(name, formula, formula_len)) return true;
   }
 
   // pass 2: fall back to argv[0]
   const char *base = strrchr(tokens[0], '/');
   const char *name = base ? base + 1 : tokens[0];
+
   if (resolve_binary_formula(name, formula, formula_len)) return true;
+
+
   return false;
 }
 
@@ -195,7 +201,6 @@ static bool get_meta_refresh(const char *url, char *out, size_t out_len) {
             if (len > 0 && len < out_len) {
               strncpy(out, semi, len);
               out[len] = '\0';
-              lwsl_notice("[favicon] meta-refresh → %s\n", out);
               return true;
             }
           }
@@ -321,6 +326,7 @@ static void favicon_fetch_work(uv_work_t *req) {
   if (!hpend || hp == hpend) return;
   *hpend = '\0';
 
+
   // resolve URL chain: follow redirects, handle github, repeat until stable
   char favicon_url[512];
   strncpy(favicon_url, hp, sizeof(favicon_url) - 1);
@@ -351,6 +357,7 @@ static void favicon_fetch_work(uv_work_t *req) {
         return;
       }
     }
+
 
     strncpy(favicon_url, next, sizeof(favicon_url) - 1);
     break;
@@ -384,12 +391,13 @@ static void favicon_fetch_done(uv_work_t *req, int status) {
                "%s%s.png", endpoints.favicon, w->formula);
       w->pss->pending_favicon_send = true;
       lws_callback_on_writable(w->pss->wsi);
-      lwsl_notice("[favicon] %s → %s\n", w->formula, w->pss->pending_favicon);
+      lwsl_notice("[favicon] %s -> %s\n", w->formula, w->pss->pending_favicon);
     }
   } else {
+    lwsl_notice("[favicon] %s: fetch failed, caching as none\n", w->formula);
     mkdir("/tmp/ttyd-favicons", 0755);
     FILE *f = fopen(w->none_path, "w");
-    if (f) { fclose(f); lwsl_notice("[favicon] %s: no favicon\n", w->formula); }
+    if (f) fclose(f);
   }
   free(w);
 }

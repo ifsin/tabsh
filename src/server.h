@@ -82,7 +82,6 @@ struct pss_tty {
   bool intentional_close;
   bool reattached;
 
-  uv_timer_t *app_timer;
   char current_app[512];
   char pending_app[512];
   bool pending_app_send;
@@ -90,6 +89,12 @@ struct pss_tty {
   char current_favicon_formula[256];
   char pending_favicon[256];
   bool pending_favicon_send;
+
+  pid_t last_fgpid;
+
+  char osc_buf[512];
+  size_t osc_len;
+  bool osc_collecting;
 };
 
 struct server {

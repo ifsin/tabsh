@@ -336,10 +336,18 @@ export class Xterm {
         const { terminal, fitAddon, overlayAddon, register, sendData, Bell } = this;
         register(
             terminal.onTitleChange(data => {
-                if (data && data !== '' && !this.titleFixed) {
+                if (!this.titleFixed) {
                     this.currentTitle = data;
-                    document.title = this.currentCwd ? `${data} | ${this.formatCwdTitle(this.currentCwd)}` : data;
-                    this.updateMeta('ttyd-title', document.title);
+                    const title =
+                        data && data !== ''
+                            ? this.currentCwd
+                                ? `${data} | ${this.formatCwdTitle(this.currentCwd)}`
+                                : data
+                            : this.currentCwd
+                            ? this.formatCwdTitle(this.currentCwd)
+                            : '';
+                    document.title = title;
+                    this.updateMeta('ttyd-title', title);
                 }
             })
         );

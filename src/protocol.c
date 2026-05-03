@@ -7,7 +7,6 @@
 #include <string.h>
 #ifndef _WIN32
 #include <fcntl.h>
-#include <signal.h>
 #include <termios.h>
 #include <unistd.h>
 #ifdef __APPLE__
@@ -18,22 +17,13 @@
 #include "pty.h"
 #include "server.h"
 #include "utils.h"
-#include "compat.h"
 
 // initial message list
 static char initial_cmds[] = {SET_PREFERENCES};
 
-#ifndef _WIN32
-static bool is_shell(const char *argv0) {
-  const char *name = strrchr(argv0, '/');
-  name = name ? name + 1 : argv0;
-  const char *shells[] = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh", NULL};
-  for (int i = 0; shells[i] != NULL; i++) {
-    if (strcmp(name, shells[i]) == 0) return true;
-  }
-  return false;
-}
+#include "favicon.h"
 
+#ifndef _WIN32
 static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   out[0] = '\0';
 #ifdef __APPLE__
@@ -46,7 +36,6 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   char *end = buf + buf_size;
   p += strnlen(p, (size_t)(end - p)) + 1;
   while (p < end && *p == '\0') p++;
-  if (argc > 0 && is_shell(p)) return;
   size_t written = 0;
   for (int i = 0; i < argc && p < end && written < out_len - 1; i++) {
     if (i > 0 && written < out_len - 1) out[written++] = ' ';
@@ -65,7 +54,6 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   ssize_t n = read(fd, buf, sizeof(buf) - 1);
   close(fd);
   if (n <= 0) return;
-  if (is_shell(buf)) return;
   size_t written = 0;
   for (ssize_t i = 0; i < n && written < out_len - 1; i++) {
     out[written++] = buf[i] == '\0' ? ' ' : buf[i];
@@ -73,67 +61,6 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   while (written > 0 && out[written - 1] == ' ') written--;
   out[written] = '\0';
 #endif
-}
-
-#include "favicon.h"
-
-static void app_detect_cb(uv_timer_t *timer) {
-  struct pss_tty *pss = (struct pss_tty *)timer->data;
-  if (pss == NULL || pss->process == NULL || pss->wsi == NULL) return;
-
-  struct termios tios;
-  if (tcgetattr(pss->process->pty, &tios) != 0) return;
-
-  bool is_raw = !(tios.c_lflag & ICANON) && !(tios.c_lflag & ECHO);
-  char app[512] = {0};
-
-  pid_t fgpid = tcgetpgrp(pss->process->pty);
-  if (fgpid > 0) get_process_argv(fgpid, app, sizeof(app));
-
-  // app name (title bar) — only update when in raw mode (TUI apps)
-  char raw_app[512] = {0};
-  if (is_raw) strncpy(raw_app, app, sizeof(raw_app) - 1);
-
-  if (strcmp(raw_app, pss->current_app) != 0) {
-    strncpy(pss->current_app, raw_app, sizeof(pss->current_app) - 1);
-    pss->current_app[sizeof(pss->current_app) - 1] = '\0';
-    strncpy(pss->pending_app, raw_app, sizeof(pss->pending_app) - 1);
-    pss->pending_app[sizeof(pss->pending_app) - 1] = '\0';
-    pss->pending_app_send = true;
-    lws_callback_on_writable(pss->wsi);
-  }
-
-  // favicon — follows any foreground process regardless of raw mode
-  char formula[256] = {0};
-  bool is_brew = app[0] != '\0' && favicon_resolve_formula(app, formula, sizeof(formula));
-
-  if (!is_brew) {
-    if (pss->current_favicon_formula[0] != '\0') {
-      pss->current_favicon_formula[0] = '\0';
-      pss->pending_favicon[0] = '\0';
-      pss->pending_favicon_send = true;
-      lws_callback_on_writable(pss->wsi);
-    }
-  } else if (strcmp(formula, pss->current_favicon_formula) != 0) {
-    strncpy(pss->current_favicon_formula, formula, sizeof(pss->current_favicon_formula) - 1);
-    pss->current_favicon_formula[sizeof(pss->current_favicon_formula) - 1] = '\0';
-
-    char cache_path[512];
-    char none_path[512];
-    snprintf(cache_path, sizeof(cache_path), "/tmp/ttyd-favicons/%s.png", formula);
-    snprintf(none_path, sizeof(none_path), "/tmp/ttyd-favicons/%s.none", formula);
-
-    if (access(none_path, F_OK) == 0) {
-      // cached no-favicon
-    } else if (access(cache_path, F_OK) == 0) {
-      snprintf(pss->pending_favicon, sizeof(pss->pending_favicon),
-               "%s%s.png", endpoints.favicon, formula);
-      pss->pending_favicon_send = true;
-      lws_callback_on_writable(pss->wsi);
-    } else {
-      favicon_queue_fetch(pss, formula, cache_path, none_path);
-    }
-  }
 }
 #endif
 
@@ -199,6 +126,97 @@ static bool check_host_origin(struct lws *wsi) {
   return len > 0 && strcasecmp(buf, host_buf) == 0;
 }
 
+#ifndef _WIN32
+static void check_favicon(struct pss_tty *pss) {
+  pid_t fgpid = pss->process ? tcgetpgrp(pss->process->pty) : -1;
+  if (fgpid <= 0) return;
+  if (fgpid == pss->last_fgpid) return;
+  pss->last_fgpid = fgpid;
+
+  char argv[512] = {0};
+  get_process_argv(fgpid, argv, sizeof(argv));
+
+  char formula[256] = {0};
+  bool is_brew = argv[0] != '\0' && favicon_resolve_formula(argv, formula, sizeof(formula));
+
+  if (!is_brew) {
+    if (pss->current_favicon_formula[0] != '\0') {
+      pss->current_favicon_formula[0] = '\0';
+      pss->pending_favicon[0] = '\0';
+      pss->pending_favicon_send = true;
+      lws_callback_on_writable(pss->wsi);
+    }
+  } else if (strcmp(formula, pss->current_favicon_formula) != 0) {
+    strncpy(pss->current_favicon_formula, formula, sizeof(pss->current_favicon_formula) - 1);
+    pss->current_favicon_formula[sizeof(pss->current_favicon_formula) - 1] = '\0';
+
+    char cache_path[512], none_path[512];
+    snprintf(cache_path, sizeof(cache_path), "/tmp/ttyd-favicons/%s.png", formula);
+    snprintf(none_path, sizeof(none_path), "/tmp/ttyd-favicons/%s.none", formula);
+
+    if (access(none_path, F_OK) == 0) {
+      // cached none
+    } else if (access(cache_path, F_OK) == 0) {
+      snprintf(pss->pending_favicon, sizeof(pss->pending_favicon),
+               "%s%s.png", endpoints.favicon, formula);
+      pss->pending_favicon_send = true;
+      lws_callback_on_writable(pss->wsi);
+    } else {
+      favicon_queue_fetch(pss, formula, cache_path, none_path);
+    }
+  }
+}
+#endif
+
+static void handle_osc_title(struct pss_tty *pss, const char *title) {
+  lwsl_notice("[osc] title: '%s'\n", title);
+
+  // update app title (for title bar) — use OSC 2 title directly
+  if (strcmp(title, pss->current_app) != 0) {
+    strncpy(pss->current_app, title, sizeof(pss->current_app) - 1);
+    pss->current_app[sizeof(pss->current_app) - 1] = '\0';
+    strncpy(pss->pending_app, title, sizeof(pss->pending_app) - 1);
+    pss->pending_app[sizeof(pss->pending_app) - 1] = '\0';
+    pss->pending_app_send = true;
+    lws_callback_on_writable(pss->wsi);
+  }
+}
+
+static void process_osc(struct pss_tty *pss, const char *data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)data[i];
+
+    if (!pss->osc_collecting) {
+      // look for ESC ]
+      if (c == '\x1b' && i + 1 < len && (unsigned char)data[i + 1] == ']') {
+        pss->osc_collecting = true;
+        pss->osc_len = 0;
+        i++; // skip ]
+      }
+      continue;
+    }
+
+    // collecting — look for ST (\a or ESC \)
+    if (c == '\a' || (c == '\x1b' && i + 1 < len && (unsigned char)data[i + 1] == '\\')) {
+      pss->osc_buf[pss->osc_len] = '\0';
+      pss->osc_collecting = false;
+
+      // only handle OSC 0, 1, 2 (set title)
+      char *buf = pss->osc_buf;
+      if ((buf[0] == '0' || buf[0] == '1' || buf[0] == '2') && buf[1] == ';') {
+        handle_osc_title(pss, buf + 2);
+      }
+
+      if (c == '\x1b') i++; // skip trailing backslash
+    } else {
+      if (pss->osc_len < sizeof(pss->osc_buf) - 1)
+        pss->osc_buf[pss->osc_len++] = (char)c;
+      else
+        pss->osc_collecting = false; // overflow — abandon
+    }
+  }
+}
+
 static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
   session_t *session = (session_t *)process->ctx;
   if (session->detached) {
@@ -206,10 +224,15 @@ static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
     return;
   }
 
-  if (eof && !process_running(process))
+  if (eof && !process_running(process)) {
     session->pss->lws_close_status = process->exit_code == 0 ? 1000 : 1006;
-  else
+  } else {
+    process_osc(session->pss, buf->base, buf->len);
+#ifndef _WIN32
+    check_favicon(session->pss);
+#endif
     session->pss->pty_buf = buf;
+  }
   lws_callback_on_writable(session->pss->wsi);
 }
 
@@ -416,12 +439,6 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             t->data = pss->process;
             uv_timer_start(t, reattach_sigwinch_cb, 100, 0);
           }
-#ifndef _WIN32
-          pss->app_timer = xmalloc(sizeof(uv_timer_t));
-          uv_timer_init(server->loop, pss->app_timer);
-          pss->app_timer->data = pss;
-          uv_timer_start(pss->app_timer, app_detect_cb, 200, 200);
-#endif
           break;
         }
         if (send_initial_message(wsi, pss->initial_cmd_index) < 0) {
@@ -594,13 +611,6 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->buffer != NULL) free(pss->buffer);
       if (pss->pty_buf != NULL) pty_buf_free(pss->pty_buf);
       if (pss->cwd != NULL) { free(pss->cwd); pss->cwd = NULL; }
-#ifndef _WIN32
-      if (pss->app_timer != NULL) {
-        uv_timer_stop(pss->app_timer);
-        uv_close((uv_handle_t *)pss->app_timer, (uv_close_cb)free);
-        pss->app_timer = NULL;
-      }
-#endif
       for (int i = 0; i < pss->argc; i++) {
         free(pss->args[i]);
       }
