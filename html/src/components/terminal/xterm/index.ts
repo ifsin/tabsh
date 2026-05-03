@@ -30,6 +30,7 @@ enum Command {
     SET_PREFERENCES = '2',
     SET_APP_COMMAND = '3',
     SET_REATTACHED = '4',
+    SET_APP_FAVICON = '5',
 
     // client side
     INPUT = '0',
@@ -537,6 +538,15 @@ export class Xterm {
             case Command.SET_APP_COMMAND:
                 this.updateUrlParam('app', textDecoder.decode(data).trim());
                 break;
+            case Command.SET_APP_FAVICON: {
+                const path = textDecoder.decode(data).trim();
+                const favicon = document.querySelector("link[rel='icon']") as HTMLLinkElement;
+                if (favicon) {
+                    if (!favicon.dataset.default) favicon.dataset.default = favicon.href;
+                    favicon.href = path || favicon.dataset.default;
+                }
+                break;
+            }
             case Command.SET_REATTACHED:
                 this.reattaching = false;
                 this.terminal.refresh(0, this.terminal.rows - 1);

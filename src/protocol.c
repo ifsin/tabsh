@@ -75,6 +75,8 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
 #endif
 }
 
+#include "favicon.h"
+
 static void app_detect_cb(uv_timer_t *timer) {
   struct pss_tty *pss = (struct pss_tty *)timer->data;
   if (pss == NULL || pss->process == NULL || pss->wsi == NULL) return;
@@ -85,18 +87,52 @@ static void app_detect_cb(uv_timer_t *timer) {
   bool is_raw = !(tios.c_lflag & ICANON) && !(tios.c_lflag & ECHO);
   char app[512] = {0};
 
-  if (is_raw) {
-    pid_t fgpid = tcgetpgrp(pss->process->pty);
-    if (fgpid > 0) get_process_argv(fgpid, app, sizeof(app));
-  }
+  pid_t fgpid = tcgetpgrp(pss->process->pty);
+  if (fgpid > 0) get_process_argv(fgpid, app, sizeof(app));
 
-  if (strcmp(app, pss->current_app) != 0) {
-    strncpy(pss->current_app, app, sizeof(pss->current_app) - 1);
+  // app name (title bar) — only update when in raw mode (TUI apps)
+  char raw_app[512] = {0};
+  if (is_raw) strncpy(raw_app, app, sizeof(raw_app) - 1);
+
+  if (strcmp(raw_app, pss->current_app) != 0) {
+    strncpy(pss->current_app, raw_app, sizeof(pss->current_app) - 1);
     pss->current_app[sizeof(pss->current_app) - 1] = '\0';
-    strncpy(pss->pending_app, app, sizeof(pss->pending_app) - 1);
+    strncpy(pss->pending_app, raw_app, sizeof(pss->pending_app) - 1);
     pss->pending_app[sizeof(pss->pending_app) - 1] = '\0';
     pss->pending_app_send = true;
     lws_callback_on_writable(pss->wsi);
+  }
+
+  // favicon — follows any foreground process regardless of raw mode
+  char formula[256] = {0};
+  bool is_brew = app[0] != '\0' && favicon_resolve_formula(app, formula, sizeof(formula));
+
+  if (!is_brew) {
+    if (pss->current_favicon_formula[0] != '\0') {
+      pss->current_favicon_formula[0] = '\0';
+      pss->pending_favicon[0] = '\0';
+      pss->pending_favicon_send = true;
+      lws_callback_on_writable(pss->wsi);
+    }
+  } else if (strcmp(formula, pss->current_favicon_formula) != 0) {
+    strncpy(pss->current_favicon_formula, formula, sizeof(pss->current_favicon_formula) - 1);
+    pss->current_favicon_formula[sizeof(pss->current_favicon_formula) - 1] = '\0';
+
+    char cache_path[512];
+    char none_path[512];
+    snprintf(cache_path, sizeof(cache_path), "/tmp/ttyd-favicons/%s.png", formula);
+    snprintf(none_path, sizeof(none_path), "/tmp/ttyd-favicons/%s.none", formula);
+
+    if (access(none_path, F_OK) == 0) {
+      // cached no-favicon
+    } else if (access(cache_path, F_OK) == 0) {
+      snprintf(pss->pending_favicon, sizeof(pss->pending_favicon),
+               "%s%s.png", endpoints.favicon, formula);
+      pss->pending_favicon_send = true;
+      lws_callback_on_writable(pss->wsi);
+    } else {
+      favicon_queue_fetch(pss, formula, cache_path, none_path);
+    }
   }
 }
 #endif
@@ -359,6 +395,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       }
 
       server->client_count++;
+      favicon_pss_add(pss);
 
       lws_get_peer_simple(lws_get_network_wsi(wsi), pss->address, sizeof(pss->address));
       lwsl_notice("WS   %s - %s, clients: %d\n", pss->path, pss->address, server->client_count);
@@ -411,6 +448,17 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         p[0] = SET_APP_COMMAND;
         memcpy(p + 1, pss->pending_app, app_len);
         lws_write(wsi, p, 1 + app_len, LWS_WRITE_BINARY);
+        free(msg);
+      }
+
+      if (pss->pending_favicon_send) {
+        pss->pending_favicon_send = false;
+        size_t flen = strlen(pss->pending_favicon);
+        unsigned char *msg = xmalloc(LWS_PRE + 1 + flen);
+        unsigned char *p = msg + LWS_PRE;
+        p[0] = SET_APP_FAVICON;
+        memcpy(p + 1, pss->pending_favicon, flen);
+        lws_write(wsi, p, 1 + flen, LWS_WRITE_BINARY);
         free(msg);
       }
 #endif
@@ -540,6 +588,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
     case LWS_CALLBACK_CLOSED:
       if (pss->wsi == NULL) break;
 
+      favicon_pss_remove(pss);
       server->client_count--;
       lwsl_notice("WS closed from %s, clients: %d\n", pss->address, server->client_count);
       if (pss->buffer != NULL) free(pss->buffer);

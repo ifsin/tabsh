@@ -1,3 +1,5 @@
+#pragma once
+
 #include <libwebsockets.h>
 #include <stdbool.h>
 #include <uv.h>
@@ -18,6 +20,7 @@
 #define SET_PREFERENCES '2'
 #define SET_APP_COMMAND '3'
 #define SET_REATTACHED '4'
+#define SET_APP_FAVICON '5'
 
 // url paths
 struct endpoints {
@@ -26,6 +29,7 @@ struct endpoints {
   char *token;
   char *parent;
   char *Bell;
+  char *favicon;
 };
 
 extern volatile bool force_exit;
@@ -82,6 +86,10 @@ struct pss_tty {
   char current_app[512];
   char pending_app[512];
   bool pending_app_send;
+
+  char current_favicon_formula[256];
+  char pending_favicon[256];
+  bool pending_favicon_send;
 };
 
 struct server {

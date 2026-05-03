@@ -168,6 +168,20 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         goto try_to_reuse;
       }
 
+      if (strncmp(pss->path, endpoints.favicon, strlen(endpoints.favicon)) == 0) {
+        const char *rel = pss->path + strlen(endpoints.favicon);
+        if (strstr(rel, "..") == NULL && strchr(rel, '/') == NULL && rel[0] != '\0') {
+          char file_path[512];
+          snprintf(file_path, sizeof(file_path), "/tmp/ttyd-favicons/%s", rel);
+          int n = lws_serve_http_file(wsi, file_path, "image/png", NULL, 0);
+          if (n < 0 || (n > 0 && lws_http_transaction_completed(wsi))) return 1;
+        } else {
+          lws_return_http_status(wsi, HTTP_STATUS_FORBIDDEN, NULL);
+          goto try_to_reuse;
+        }
+        break;
+      }
+
       if (strncmp(pss->path, endpoints.index, strlen(endpoints.index)) != 0) {
         lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
         goto try_to_reuse;
