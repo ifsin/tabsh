@@ -1,4 +1,4 @@
-name: Update Homebrew Tap
+name: update homebrew tap
 
 on:
   release:
