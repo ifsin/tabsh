@@ -7,6 +7,8 @@
 #include "pty.h"
 #include "compat.h"
 
+#define PTY_RING_SIZE (256 * 1024)
+
 // client message
 #define INPUT '0'
 #define RESIZE_TERMINAL '1'
@@ -31,6 +33,7 @@ struct endpoints {
   char *parent;
   char *Bell;
   char *favicon;
+  char *content;
 };
 
 extern volatile bool force_exit;
@@ -121,6 +124,10 @@ struct server {
 
   uv_loop_t *loop;         // the libuv event loop
   session_t *sessions;     // linked list of detached sessions
+
+  char pty_ring[PTY_RING_SIZE];
+  size_t pty_ring_head;
+  size_t pty_ring_len;
 };
 
 session_t *session_find(const char *id);

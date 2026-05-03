@@ -105,6 +105,7 @@ export class Xterm {
     private homeDir?: string;
     private currentCwd?: string;
     private currentTitle?: string;
+    private currentApp?: string;
     private resizeOverlay = true;
     private reconnect = true;
     private doReconnect = true;
@@ -132,7 +133,10 @@ export class Xterm {
         }
         window.history.replaceState(null, '', url.toString());
         this.setMetaProperty('og:url', url.toString());
-        this.updateMeta(`ttyd-${key}`, value);
+        if (key === 'app') {
+            this.currentApp = value || undefined;
+            this.refreshDescription();
+        }
     }
 
     private updateCwdPath(cwd: string) {
@@ -141,7 +145,7 @@ export class Xterm {
         url.pathname = `${base}/dir${cwd}`;
         window.history.replaceState(null, '', url.toString());
         this.setMetaProperty('og:url', url.toString());
-        this.updateMeta('ttyd-cwd', cwd);
+        this.refreshDescription();
     }
 
     private formatCwdTitle(cwd: string): string {
@@ -176,24 +180,10 @@ export class Xterm {
         return new URLSearchParams(window.location.search).get('app');
     }
 
-    private updateMeta(name: string, value: string) {
-        let el = document.querySelector(`meta[name="${name}"]`) as HTMLMetaElement;
-        if (!el) {
-            el = document.createElement('meta');
-            el.name = name;
-            document.head.appendChild(el);
-        }
-        el.content = value ?? '';
-
-        if (name === 'ttyd-title') {
-            this.setMetaProperty('og:title', value);
-            this.setMetaProperty('og:description', this.buildDescription());
-            this.setMetaName('description', this.buildDescription());
-        }
-        if (name === 'ttyd-app' || name === 'ttyd-cwd') {
-            this.setMetaProperty('og:description', this.buildDescription());
-            this.setMetaName('description', this.buildDescription());
-        }
+    private refreshDescription() {
+        const desc = this.buildDescription();
+        this.setMetaName('description', desc);
+        this.setMetaProperty('og:description', desc);
     }
 
     private setMetaName(name: string, value: string) {
@@ -218,10 +208,8 @@ export class Xterm {
 
     private buildDescription(): string {
         const parts: string[] = [];
-        const app = (document.querySelector('meta[name="ttyd-app"]') as HTMLMetaElement)?.content;
-        const cwd = (document.querySelector('meta[name="ttyd-cwd"]') as HTMLMetaElement)?.content;
-        if (app) parts.push(`app: ${app}`);
-        if (cwd) parts.push(`cwd: ${cwd}`);
+        if (this.currentApp) parts.push(`app: ${this.currentApp}`);
+        if (this.currentCwd) parts.push(`cwd: ${this.currentCwd}`);
         return parts.length > 0 ? parts.join(', ') : 'Terminal session';
     }
 
@@ -298,6 +286,30 @@ export class Xterm {
         terminal.open(parent);
         fitAddon.fit();
 
+        const termBuf = document.createElement('pre');
+        termBuf.id = 'ttyd-buffer';
+        termBuf.setAttribute('aria-label', 'terminal output');
+        termBuf.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden';
+        document.body.appendChild(termBuf);
+
+        terminal.onRender(() => {
+            const lines: string[] = [];
+            for (let i = 0; i < terminal.rows; i++) {
+                lines.push(terminal.buffer.active.getLine(i)?.translateToString(true) ?? '');
+            }
+            termBuf.textContent = lines.join('\n');
+        });
+
+        const apiHint = document.createElement('div');
+        apiHint.id = 'ttyd-api';
+        apiHint.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden';
+        apiHint.textContent =
+            'Terminal content API:\n' +
+            '- Current viewport: #ttyd-buffer (DOM element)\n' +
+            '- GET /content?lines=N  (last N raw lines, default 100)\n' +
+            '- GET /content?blocks=N (last N command+output pairs, default 10)';
+        document.body.appendChild(apiHint);
+
         terminal.parser.registerOscHandler(7, data => {
             try {
                 const cwd = new URL(data).pathname;
@@ -306,7 +318,8 @@ export class Xterm {
                 if (!this.titleFixed) {
                     const cwdFormatted = this.formatCwdTitle(cwd);
                     document.title = this.currentTitle ? `${this.currentTitle} | ${cwdFormatted}` : cwdFormatted;
-                    this.updateMeta('ttyd-title', document.title);
+                    this.setMetaProperty('og:title', document.title);
+                    this.refreshDescription();
                 }
             } catch (_) {
                 /* malformed OSC 7 */
@@ -351,7 +364,8 @@ export class Xterm {
                             ? this.formatCwdTitle(this.currentCwd)
                             : '';
                     document.title = title;
-                    this.updateMeta('ttyd-title', title);
+                    this.setMetaProperty('og:title', title);
+                    this.refreshDescription();
                 }
             })
         );
@@ -646,7 +660,8 @@ export class Xterm {
                     console.log(`[ttyd] setting fixed title: ${value}`);
                     this.titleFixed = value;
                     document.title = value;
-                    this.updateMeta('ttyd-title', value);
+                    this.setMetaProperty('og:title', value);
+                    this.refreshDescription();
                     break;
                 case 'homeDir':
                     if (value) this.homeDir = value;

@@ -250,6 +250,19 @@ static void check_foreground_process(struct pss_tty *pss) {
 }
 #endif
 
+static void pty_ring_write(const char *data, size_t len) {
+  if (len == 0 || len >= PTY_RING_SIZE) return;
+  size_t space = PTY_RING_SIZE - server->pty_ring_head;
+  if (len <= space) {
+    memcpy(server->pty_ring + server->pty_ring_head, data, len);
+  } else {
+    memcpy(server->pty_ring + server->pty_ring_head, data, space);
+    memcpy(server->pty_ring, data + space, len - space);
+  }
+  server->pty_ring_head = (server->pty_ring_head + len) % PTY_RING_SIZE;
+  server->pty_ring_len = server->pty_ring_len + len > PTY_RING_SIZE ? PTY_RING_SIZE : server->pty_ring_len + len;
+}
+
 static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
   session_t *session = (session_t *)process->ctx;
   if (session->detached) {
@@ -263,6 +276,7 @@ static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
 #ifndef _WIN32
     check_foreground_process(session->pss);
 #endif
+    pty_ring_write(buf->base, buf->len);
     session->pss->pty_buf = buf;
   }
   lws_callback_on_writable(session->pss->wsi);
