@@ -46,8 +46,8 @@ jobs:
           cmake --build build --config Release
       - uses: actions/upload-artifact@v7
         with:
-          name: ttyd.msvc
-          path: build/Release/ttyd.exe
+          name: tabsh.msvc
+          path: build/Release/tabsh.exe
   cross:
     runs-on: ubuntu-24.04
     strategy:
@@ -66,6 +66,6 @@ jobs:
         run: ./scripts/cross-build.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: ttyd.${{ matrix.target }}
-          path: build/ttyd*
+          name: tabsh.${{ matrix.target }}
+          path: build/tabsh*
 

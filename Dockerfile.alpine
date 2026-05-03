@@ -6,10 +6,10 @@ ARG TARGETARCH
 RUN apk add --no-cache bash tini
 
 # Application
-COPY ./dist/${TARGETARCH}/ttyd /usr/bin/ttyd
+COPY ./dist/${TARGETARCH}/tabsh /usr/bin/tabsh
 
 EXPOSE 7681
 WORKDIR /root
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["ttyd", "-W", "bash"]
+CMD ["tabsh", "-W", "bash"]
