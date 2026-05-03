@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <errno.h>
 #include <json.h>
 #include <libwebsockets.h>
@@ -24,7 +25,69 @@ static char initial_cmds[] = {SET_PREFERENCES};
 #include "favicon.h"
 
 #ifndef _WIN32
-static void get_process_argv(pid_t pid, char *out, size_t out_len) {
+static void append_arg_text(char **out, size_t *out_len, const char *text, size_t text_len) {
+  if (*out_len <= 1) return;
+
+  size_t len = text_len < *out_len - 1 ? text_len : *out_len - 1;
+  memcpy(*out, text, len);
+  *out += len;
+  *out_len -= len;
+  **out = '\0';
+}
+
+static bool shell_arg_is_safe(const char *arg) {
+  if (*arg == '\0') return false;
+
+  for (const unsigned char *p = (const unsigned char *)arg; *p != '\0'; p++) {
+    if (isalnum(*p) || strchr("_+-./:=,@%", *p) != NULL) continue;
+    return false;
+  }
+
+  return true;
+}
+
+static bool command_is_shell(const char *command) {
+  static const char *shell_names[] = {"zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", NULL};
+  const char *argv0 = strrchr(command, '/');
+  argv0 = argv0 != NULL ? argv0 + 1 : command;
+
+  char name[64] = {0};
+  const char *sp = strchr(argv0, ' ');
+  size_t len = sp ? (size_t)(sp - argv0) : strlen(argv0);
+  if (len >= sizeof(name)) return false;
+  strncpy(name, argv0, len);
+
+  for (int i = 0; shell_names[i] != NULL; i++) {
+    if (strcmp(name, shell_names[i]) == 0) return true;
+  }
+  return false;
+}
+
+static void append_shell_arg(char **out, size_t *out_len, const char *arg) {
+  if (shell_arg_is_safe(arg)) {
+    append_arg_text(out, out_len, arg, strlen(arg));
+    return;
+  }
+
+  append_arg_text(out, out_len, "'", 1);
+  for (const char *p = arg; *p != '\0'; p++) {
+    if (*p == '\'') {
+      append_arg_text(out, out_len, "'\\''", 4);
+    } else {
+      append_arg_text(out, out_len, p, 1);
+    }
+  }
+  append_arg_text(out, out_len, "'", 1);
+}
+
+static void append_process_arg(char **out, size_t *out_len, const char *arg, bool shell_quote) {
+  if (shell_quote)
+    append_shell_arg(out, out_len, arg);
+  else
+    append_arg_text(out, out_len, arg, strlen(arg));
+}
+
+static void get_process_argv(pid_t pid, char *out, size_t out_len, bool shell_quote) {
   out[0] = '\0';
 #ifdef __APPLE__
   int mib[3] = {CTL_KERN, KERN_PROCARGS2, pid};
@@ -36,15 +99,13 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   char *end = buf + buf_size;
   p += strnlen(p, (size_t)(end - p)) + 1;
   while (p < end && *p == '\0') p++;
-  size_t written = 0;
-  for (int i = 0; i < argc && p < end && written < out_len - 1; i++) {
-    if (i > 0 && written < out_len - 1) out[written++] = ' ';
-    size_t arg_len = strnlen(p, out_len - written - 1);
-    memcpy(out + written, p, arg_len);
-    written += arg_len;
+  char *dst = out;
+  size_t remaining = out_len;
+  for (int i = 0; i < argc && p < end && remaining > 1; i++) {
+    if (i > 0) append_arg_text(&dst, &remaining, " ", 1);
+    append_process_arg(&dst, &remaining, p, shell_quote);
     p += strnlen(p, (size_t)(end - p)) + 1;
   }
-  out[written] = '\0';
 #else
   char path[64];
   snprintf(path, sizeof(path), "/proc/%d/cmdline", (int)pid);
@@ -54,12 +115,15 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len) {
   ssize_t n = read(fd, buf, sizeof(buf) - 1);
   close(fd);
   if (n <= 0) return;
-  size_t written = 0;
-  for (ssize_t i = 0; i < n && written < out_len - 1; i++) {
-    out[written++] = buf[i] == '\0' ? ' ' : buf[i];
+
+  char *dst = out;
+  size_t remaining = out_len;
+  for (ssize_t i = 0; i < n && remaining > 1;) {
+    size_t arg_len = strnlen(buf + i, (size_t)(n - i));
+    if (dst != out) append_arg_text(&dst, &remaining, " ", 1);
+    append_process_arg(&dst, &remaining, buf + i, shell_quote);
+    i += (ssize_t)arg_len + 1;
   }
-  while (written > 0 && out[written - 1] == ' ') written--;
-  out[written] = '\0';
 #endif
 }
 #endif
@@ -127,17 +191,35 @@ static bool check_host_origin(struct lws *wsi) {
 }
 
 #ifndef _WIN32
-static void check_favicon(struct pss_tty *pss) {
+static void check_foreground_process(struct pss_tty *pss) {
   pid_t fgpid = pss->process ? tcgetpgrp(pss->process->pty) : -1;
   if (fgpid <= 0) return;
   if (fgpid == pss->last_fgpid) return;
   pss->last_fgpid = fgpid;
 
-  char argv[512] = {0};
-  get_process_argv(fgpid, argv, sizeof(argv));
+  char raw_argv[APP_COMMAND_LEN] = {0};
+  char quoted_argv[APP_COMMAND_LEN] = {0};
+  get_process_argv(fgpid, raw_argv, sizeof(raw_argv), false);
+  get_process_argv(fgpid, quoted_argv, sizeof(quoted_argv), true);
+
+  if ((pss->session != NULL && fgpid == pss->session->root_pid) || command_is_shell(raw_argv)) {
+    if (pss->current_app[0] != '\0') {
+      pss->current_app[0] = '\0';
+      pss->pending_app[0] = '\0';
+      pss->pending_app_send = true;
+      lws_callback_on_writable(pss->wsi);
+    }
+  } else if (strcmp(quoted_argv, pss->current_app) != 0) {
+    strncpy(pss->current_app, quoted_argv, sizeof(pss->current_app) - 1);
+    pss->current_app[sizeof(pss->current_app) - 1] = '\0';
+    strncpy(pss->pending_app, quoted_argv, sizeof(pss->pending_app) - 1);
+    pss->pending_app[sizeof(pss->pending_app) - 1] = '\0';
+    pss->pending_app_send = true;
+    lws_callback_on_writable(pss->wsi);
+  }
 
   char formula[256] = {0};
-  bool is_brew = argv[0] != '\0' && favicon_resolve_formula(argv, formula, sizeof(formula));
+  bool is_brew = raw_argv[0] != '\0' && favicon_resolve_formula(raw_argv, formula, sizeof(formula));
 
   if (!is_brew) {
     if (pss->current_favicon_formula[0] != '\0') {
@@ -168,55 +250,6 @@ static void check_favicon(struct pss_tty *pss) {
 }
 #endif
 
-static void handle_osc_title(struct pss_tty *pss, const char *title) {
-  lwsl_notice("[osc] title: '%s'\n", title);
-
-  // update app title (for title bar) — use OSC 2 title directly
-  if (strcmp(title, pss->current_app) != 0) {
-    strncpy(pss->current_app, title, sizeof(pss->current_app) - 1);
-    pss->current_app[sizeof(pss->current_app) - 1] = '\0';
-    strncpy(pss->pending_app, title, sizeof(pss->pending_app) - 1);
-    pss->pending_app[sizeof(pss->pending_app) - 1] = '\0';
-    pss->pending_app_send = true;
-    lws_callback_on_writable(pss->wsi);
-  }
-}
-
-static void process_osc(struct pss_tty *pss, const char *data, size_t len) {
-  for (size_t i = 0; i < len; i++) {
-    unsigned char c = (unsigned char)data[i];
-
-    if (!pss->osc_collecting) {
-      // look for ESC ]
-      if (c == '\x1b' && i + 1 < len && (unsigned char)data[i + 1] == ']') {
-        pss->osc_collecting = true;
-        pss->osc_len = 0;
-        i++; // skip ]
-      }
-      continue;
-    }
-
-    // collecting — look for ST (\a or ESC \)
-    if (c == '\a' || (c == '\x1b' && i + 1 < len && (unsigned char)data[i + 1] == '\\')) {
-      pss->osc_buf[pss->osc_len] = '\0';
-      pss->osc_collecting = false;
-
-      // only handle OSC 0, 1, 2 (set title)
-      char *buf = pss->osc_buf;
-      if ((buf[0] == '0' || buf[0] == '1' || buf[0] == '2') && buf[1] == ';') {
-        handle_osc_title(pss, buf + 2);
-      }
-
-      if (c == '\x1b') i++; // skip trailing backslash
-    } else {
-      if (pss->osc_len < sizeof(pss->osc_buf) - 1)
-        pss->osc_buf[pss->osc_len++] = (char)c;
-      else
-        pss->osc_collecting = false; // overflow — abandon
-    }
-  }
-}
-
 static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
   session_t *session = (session_t *)process->ctx;
   if (session->detached) {
@@ -227,9 +260,8 @@ static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
   if (eof && !process_running(process)) {
     session->pss->lws_close_status = process->exit_code == 0 ? 1000 : 1006;
   } else {
-    process_osc(session->pss, buf->base, buf->len);
 #ifndef _WIN32
-    check_favicon(session->pss);
+    check_foreground_process(session->pss);
 #endif
     session->pss->pty_buf = buf;
   }
@@ -318,10 +350,21 @@ static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t 
     return false;
   }
   lwsl_notice("started process, pid: %d\n", process->pid);
+  session->root_pid = process->pid;
   pss->process = process;
   pss->session = session;
   strncpy(pss->session_id, session_id, SESSION_ID_LEN - 1);
   pss->session_id[SESSION_ID_LEN - 1] = '\0';
+  if (pss->app_command != NULL) {
+    size_t app_len = strlen(pss->app_command);
+    char *input = xmalloc(app_len + 2);
+    memcpy(input, pss->app_command, app_len);
+    input[app_len] = '\r';
+    input[app_len + 1] = '\0';
+    int err = pty_write(process, pty_buf_init(input, app_len + 1));
+    free(input);
+    if (err) lwsl_err("write app command: %s (%s)\n", uv_err_name(err), uv_strerror(err));
+  }
   lws_callback_on_writable(pss->wsi);
 
   return true;
@@ -583,6 +626,13 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
               pss->cwd = strdup(cwd_str);
           }
 
+          struct json_object *app_obj = NULL;
+          if (server->url_arg && json_object_object_get_ex(obj, "app", &app_obj)) {
+            const char *app_str = json_object_get_string(app_obj);
+            if (app_str != NULL && strlen(app_str) > 0)
+              pss->app_command = strdup(app_str);
+          }
+
           if (!spawn_process(pss, client_session_id, columns, rows)) {
             json_object_put(obj);
             return 1;
@@ -611,6 +661,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->buffer != NULL) free(pss->buffer);
       if (pss->pty_buf != NULL) pty_buf_free(pss->pty_buf);
       if (pss->cwd != NULL) { free(pss->cwd); pss->cwd = NULL; }
+      if (pss->app_command != NULL) { free(pss->app_command); pss->app_command = NULL; }
       for (int i = 0; i < pss->argc; i++) {
         free(pss->args[i]);
       }

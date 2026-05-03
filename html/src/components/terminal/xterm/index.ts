@@ -172,6 +172,10 @@ export class Xterm {
         return match ? decodeURIComponent(match[1]) : null;
     }
 
+    private static parseAppFromQuery(): string | null {
+        return new URLSearchParams(window.location.search).get('app');
+    }
+
     private updateMeta(name: string, value: string) {
         let el = document.querySelector(`meta[name="${name}"]`) as HTMLMetaElement;
         if (!el) {
@@ -451,6 +455,7 @@ export class Xterm {
             rows: terminal.rows,
             sessionId: this.sessionId,
             ...(Xterm.parseCwdFromPath() ? { cwd: Xterm.parseCwdFromPath() } : {}),
+            ...(Xterm.parseAppFromQuery() ? { app: Xterm.parseAppFromQuery() } : {}),
         });
         this.socket?.send(textEncoder.encode(msg));
 

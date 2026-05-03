@@ -46,6 +46,7 @@ struct pss_http {
 
 #define SESSION_TIMEOUT_MS 10000
 #define SESSION_ID_LEN 37
+#define APP_COMMAND_LEN 4096
 
 struct pss_tty;
 
@@ -54,6 +55,7 @@ typedef struct session {
   pty_process *process;
   struct pss_tty *pss;
   uv_timer_t *timer;
+  pid_t root_pid;
   bool detached;
   struct session *next;
 } session_t;
@@ -78,12 +80,13 @@ struct pss_tty {
   session_t *session;
 
   char *cwd;
+  char *app_command;
   int lws_close_status;
   bool intentional_close;
   bool reattached;
 
-  char current_app[512];
-  char pending_app[512];
+  char current_app[APP_COMMAND_LEN];
+  char pending_app[APP_COMMAND_LEN];
   bool pending_app_send;
 
   char current_favicon_formula[256];
@@ -91,10 +94,6 @@ struct pss_tty {
   bool pending_favicon_send;
 
   pid_t last_fgpid;
-
-  char osc_buf[512];
-  size_t osc_len;
-  bool osc_collecting;
 };
 
 struct server {
