@@ -4,7 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
+#include "compat.h"
 
 #include "favicon.h"
 #include "server.h"
@@ -59,6 +62,7 @@ static bool is_shell(const char *name) {
   return false;
 }
 
+#ifndef _WIN32
 static bool resolve_binary_formula(const char *binary, char *formula, size_t formula_len) {
   const char *brew_bins[] = {"/opt/homebrew/bin/", "/usr/local/bin/", NULL};
   for (int i = 0; brew_bins[i]; i++) {
@@ -86,6 +90,7 @@ static bool resolve_binary_formula(const char *binary, char *formula, size_t for
   }
   return false;
 }
+#endif /* !_WIN32 */
 
 bool favicon_resolve_formula(const char *app, char *formula, size_t formula_len) {
   char buf[512];
@@ -115,20 +120,26 @@ bool favicon_resolve_formula(const char *app, char *formula, size_t formula_len)
   for (int i = ntokens - 1; i >= 0; i--) {
     if (strchr(tokens[i], '/') == NULL) continue;
     const char *name = strrchr(tokens[i], '/') + 1;
-
+#ifndef _WIN32
     if (resolve_binary_formula(name, formula, formula_len)) return true;
+#else
+    (void)name;
+#endif
   }
 
   // pass 2: fall back to argv[0]
   const char *base = strrchr(tokens[0], '/');
   const char *name = base ? base + 1 : tokens[0];
-
+#ifndef _WIN32
   if (resolve_binary_formula(name, formula, formula_len)) return true;
-
+#else
+  (void)name;
+#endif
 
   return false;
 }
 
+#ifndef _WIN32
 // ---------------------------------------------------------------------------
 // URL helpers
 // ---------------------------------------------------------------------------
@@ -366,7 +377,7 @@ static void favicon_fetch_work(uv_work_t *req) {
 
   if (strstr(favicon_url, "://") == NULL) return;
 
-  mkdir("/tmp/ttyd-favicons", 0755);
+  mkdir_p("/tmp/ttyd-favicons", 0755);
 
   char curl_cmd[1024];
   // avatars.githubusercontent.com URLs are direct images — download them as-is
@@ -395,7 +406,7 @@ static void favicon_fetch_done(uv_work_t *req, int status) {
     }
   } else {
     lwsl_notice("[favicon] %s: fetch failed, caching as none\n", w->formula);
-    mkdir("/tmp/ttyd-favicons", 0755);
+    mkdir_p("/tmp/ttyd-favicons", 0755);
     FILE *f = fopen(w->none_path, "w");
     if (f) fclose(f);
   }
@@ -411,3 +422,8 @@ void favicon_queue_fetch(struct pss_tty *pss, const char *formula, const char *c
   w->pss = pss;
   uv_queue_work(server->loop, &w->work, favicon_fetch_work, favicon_fetch_done);
 }
+#else
+void favicon_queue_fetch(struct pss_tty *pss, const char *formula, const char *cache_path, const char *none_path) {
+  (void)pss; (void)formula; (void)cache_path; (void)none_path;
+}
+#endif /* !_WIN32 */
