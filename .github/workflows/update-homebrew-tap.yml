@@ -3,6 +3,11 @@ name: update homebrew tap
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g. 1.8.3)'
+        required: true
 
 jobs:
   update-tap:
@@ -11,7 +16,7 @@ jobs:
       - name: Get release info
         id: release
         run: |
-          TAG_NAME="${{ github.event.release.tag_name }}"
+          TAG_NAME="${{ github.event.release.tag_name || github.event.inputs.tag_name }}"
           VERSION="${TAG_NAME#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tarball_url=https://github.com/ifsin/tabsh/archive/refs/tags/${TAG_NAME}.tar.gz" >> "$GITHUB_OUTPUT"
