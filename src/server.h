@@ -5,6 +5,7 @@
 #include <uv.h>
 
 #include "pty.h"
+#include "compat.h"
 
 // client message
 #define INPUT '0'

@@ -8,6 +8,8 @@
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
 
+typedef int pid_t;
+
 #ifndef S_ISDIR
 #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 #endif
