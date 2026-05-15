@@ -78,5 +78,8 @@ void session_attach(session_t *session, struct pss_tty *pss) {
   session_remove(session);
   uv_timer_stop(session->timer);
   pss->reattached = true;
+  if (session->notify != NULL) {
+    pss->notify = session->notify;
+  }
   lwsl_notice("session %s reattached\n", session->id);
 }

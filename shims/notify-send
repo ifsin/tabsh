@@ -1,0 +1,15 @@
+#!/bin/sh
+TITLE="" BODY="" URGENCY="normal" APP=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -u|--urgency)  URGENCY="$2"; shift 2;;
+    -a|--app-name) APP="$2"; shift 2;;
+    -i|--icon|-t|--expire-time|-c|--category|-h|--hint) shift 2;;
+    -*) shift;;
+    *) [ -z "$TITLE" ] && TITLE="$1" || BODY="$1"; shift;;
+  esac
+done
+TITLE=$(printf '%s' "$TITLE" | sed 's/\\/\\\\/g;s/"/\\"/g')
+BODY=$(printf '%s' "$BODY" | sed 's/\\/\\\\/g;s/"/\\"/g')
+printf '\033]777;notify;%s;%s\007' "$TITLE" "$BODY" > /dev/tty 2>/dev/null
+exit 0

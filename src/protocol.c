@@ -15,6 +15,7 @@
 #endif
 #endif
 
+#include "notify.h"
 #include "pty.h"
 #include "server.h"
 #include "utils.h"
@@ -46,21 +47,27 @@ static bool shell_arg_is_safe(const char *arg) {
   return true;
 }
 
-static bool command_is_shell(const char *command) {
-  static const char *shell_names[] = {"zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", NULL};
+static const char *detect_shell(const char *command) {
+  static const char *shell_names[] = {"zsh",     "bash",      "fish",    "sh",
+                                       "dash",    "ksh",       "tcsh",    "pwsh",
+                                       "powershell", "cmd",    NULL};
   const char *argv0 = strrchr(command, '/');
   argv0 = argv0 != NULL ? argv0 + 1 : command;
 
   char name[64] = {0};
   const char *sp = strchr(argv0, ' ');
   size_t len = sp ? (size_t)(sp - argv0) : strlen(argv0);
-  if (len >= sizeof(name)) return false;
+  if (len >= sizeof(name)) return NULL;
   strncpy(name, argv0, len);
 
   for (int i = 0; shell_names[i] != NULL; i++) {
-    if (strcmp(name, shell_names[i]) == 0) return true;
+    if (strcmp(name, shell_names[i]) == 0) return shell_names[i];
   }
-  return false;
+  return NULL;
+}
+
+static bool command_is_shell(const char *command) {
+  return detect_shell(command) != NULL;
 }
 
 static void append_shell_arg(char **out, size_t *out_len, const char *arg) {
@@ -298,6 +305,13 @@ static void process_exit_cb(pty_process *process) {
   lws_callback_on_writable(session->pss->wsi);
 
 done:
+#ifndef _WIN32
+  if (session->notify != NULL) {
+    notify_ctx_destroy(session->notify);
+    session->notify = NULL;
+    if (pss != NULL) pss->notify = NULL;
+  }
+#endif
   session_remove(session);
   if (session->timer != NULL) {
     uv_timer_stop(session->timer);
@@ -310,11 +324,45 @@ done:
 }
 
 static char **build_args(struct pss_tty *pss) {
+  const char *shell = detect_shell(server->argv[0]);
+  int extra = 0;
+
+  if (shell != NULL && pss->notify != NULL) {
+    if (strcmp(shell, "bash") == 0) {
+      extra = 2;
+    } else if (strcmp(shell, "pwsh") == 0 || strcmp(shell, "powershell") == 0) {
+      extra = 3;
+    } else if (strcmp(shell, "cmd") == 0) {
+      extra = 2;
+    }
+  }
+
   int i, n = 0;
-  char **argv = xmalloc((server->argc + pss->argc + 1) * sizeof(char *));
+  char **argv = xmalloc((server->argc + pss->argc + extra + 1) * sizeof(char *));
 
   for (i = 0; i < server->argc; i++) {
     argv[n++] = server->argv[i];
+  }
+
+  if (extra > 0) {
+    const char *init_dir = notify_init_dir(pss->notify);
+    if (strcmp(shell, "bash") == 0) {
+      argv[n++] = "--rcfile";
+      char *path = xmalloc(strlen(init_dir) + 8);
+      sprintf(path, "%s/bashrc", init_dir);
+      argv[n++] = path;
+    } else if (strcmp(shell, "pwsh") == 0 || strcmp(shell, "powershell") == 0) {
+      argv[n++] = "-NoExit";
+      argv[n++] = "-File";
+      char *path = xmalloc(strlen(init_dir) + 10);
+      sprintf(path, "%s/init.ps1", init_dir);
+      argv[n++] = path;
+    } else if (strcmp(shell, "cmd") == 0) {
+      argv[n++] = "/K";
+      char *path = xmalloc(strlen(init_dir) + 10);
+      sprintf(path, "%s\\init.bat", init_dir);
+      argv[n++] = path;
+    }
   }
 
   for (i = 0; i < pss->argc; i++) {
@@ -343,15 +391,81 @@ static char **build_env(struct pss_tty *pss) {
     i++;
   }
 
+#ifndef _WIN32
+  if (pss->notify != NULL) {
+    const char *shim = notify_shim_dir(pss->notify);
+    const char *init = notify_init_dir(pss->notify);
+
+    envp = xrealloc(envp, (++n) * sizeof(char *));
+    envp[i] = xmalloc(256);
+    snprintf(envp[i], 256, "TABSH_SHIM_DIR=%s", shim);
+    i++;
+
+    envp = xrealloc(envp, (++n) * sizeof(char *));
+    envp[i] = xmalloc(256);
+    snprintf(envp[i], 256, "TABSH_INIT_DIR=%s", init);
+    i++;
+
+    const char *old_path = getenv("PATH");
+    if (old_path != NULL) {
+      size_t path_len = strlen(shim) + 1 + strlen(old_path) + 6;
+      envp = xrealloc(envp, (++n) * sizeof(char *));
+      envp[i] = xmalloc(path_len);
+      snprintf(envp[i], path_len, "PATH=%s:%s", shim, old_path);
+      i++;
+    }
+
+    const char *shell = detect_shell(server->argv[0]);
+    if (shell != NULL) {
+      if (strcmp(shell, "zsh") == 0) {
+        const char *orig_zdotdir = getenv("ZDOTDIR");
+        if (orig_zdotdir != NULL) {
+          envp = xrealloc(envp, (++n) * sizeof(char *));
+          envp[i] = xmalloc(256);
+          snprintf(envp[i], 256, "TABSH_ORIG_ZDOTDIR=%s", orig_zdotdir);
+          i++;
+        }
+        envp = xrealloc(envp, (++n) * sizeof(char *));
+        envp[i] = xmalloc(256);
+        snprintf(envp[i], 256, "ZDOTDIR=%s/zsh", init);
+        i++;
+      } else if (strcmp(shell, "fish") == 0) {
+        envp = xrealloc(envp, (++n) * sizeof(char *));
+        envp[i] = xmalloc(256);
+        snprintf(envp[i], 256, "XDG_CONFIG_HOME=%s/fish", init);
+        i++;
+      } else if (strcmp(shell, "sh") == 0 || strcmp(shell, "dash") == 0 || strcmp(shell, "ksh") == 0) {
+        const char *orig_env = getenv("ENV");
+        if (orig_env != NULL) {
+          envp = xrealloc(envp, (++n) * sizeof(char *));
+          envp[i] = xmalloc(256);
+          snprintf(envp[i], 256, "TABSH_ORIG_ENV=%s", orig_env);
+          i++;
+        }
+        envp = xrealloc(envp, (++n) * sizeof(char *));
+        envp[i] = xmalloc(256);
+        snprintf(envp[i], 256, "ENV=%s/env.sh", init);
+        i++;
+      }
+    }
+  }
+#endif
+
   envp[i] = NULL;
 
   return envp;
 }
 
 static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t columns, uint16_t rows) {
+#ifndef _WIN32
+  notify_ctx_init(&pss->notify, session_id);
+#endif
   pty_process *process = process_init(NULL, server->loop, build_args(pss), build_env(pss));
   session_t *session = session_create(session_id, process, pss);
   process->ctx = (void *)session;
+#ifndef _WIN32
+  session->notify = pss->notify;
+#endif
   const char *cwd = pss->cwd ? pss->cwd : server->cwd;
   if (cwd != NULL) process->cwd = strdup(cwd);
   if (columns > 0) process->columns = columns;
@@ -360,6 +474,12 @@ static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t 
     lwsl_err("pty_spawn: %d (%s)\n", errno, strerror(errno));
     uv_close((uv_handle_t *)session->timer, (uv_close_cb)free);
     process_free(process);
+#ifndef _WIN32
+    if (pss->notify != NULL) {
+      notify_ctx_destroy(pss->notify);
+      pss->notify = NULL;
+    }
+#endif
     free(session);
     return false;
   }
@@ -463,7 +583,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       pss->lws_close_status = LWS_CLOSE_STATUS_NOSTATUS;
       pss->session = NULL;
       pss->session_id[0] = '\0';
-
+      pss->notify = NULL;
       if (server->url_arg) {
         while (lws_hdr_copy_fragment(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_URI_ARGS, n++) > 0) {
           if (strncmp(buf, "arg=", 4) == 0) {
@@ -535,6 +655,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         lws_write(wsi, p, 1 + flen, LWS_WRITE_BINARY);
         free(msg);
       }
+
 #endif
 
       if (pss->pty_buf != NULL) {
@@ -679,9 +800,19 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       for (int i = 0; i < pss->argc; i++) {
         free(pss->args[i]);
       }
-
       if (pss->process != NULL && process_running(pss->process)) {
         if (pss->session != NULL) {
+#ifndef _WIN32
+          if (pss->notify != NULL) {
+            if (pss->intentional_close) {
+              notify_ctx_destroy(pss->notify);
+              pss->session->notify = NULL;
+            } else {
+              pss->session->notify = pss->notify;
+            }
+            pss->notify = NULL;
+          }
+#endif
           if (pss->intentional_close) {
             session_stop(pss->session);
           } else {
@@ -690,6 +821,12 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
           }
           pss->session = NULL;
         } else {
+#ifndef _WIN32
+          if (pss->notify != NULL) {
+            notify_ctx_destroy(pss->notify);
+            pss->notify = NULL;
+          }
+#endif
           pty_pause(pss->process);
           lwsl_notice("killing process, pid: %d\n", pss->process->pid);
           pty_kill(pss->process, server->sig_code);

@@ -33,7 +33,7 @@ else()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _GNU_SOURCE)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty.c src/session.c src/favicon.c src/protocol.c src/http.c src/server.c)
+set(SOURCE_FILES src/utils.c src/pty.c src/session.c src/favicon.c src/notify.c src/protocol.c src/http.c src/server.c)
 
 include(FindPackageHandleStandardArgs)
 
@@ -107,7 +107,40 @@ else()
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Embed shims/ into a generated C header using xxd -i
+# ---------------------------------------------------------------------------
+set(SHIMS_H "${CMAKE_CURRENT_SOURCE_DIR}/src/shims.h")
+set(SHIM_SRCS
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/notify-send"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/osascript"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/terminal-notifier"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/kdialog"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/init/bashrc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/init/zshrc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/init/fish/config.fish"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/init/fish/conf.d/zzz-tabsh.fish"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/init/env.sh"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/init/init.ps1"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shims/init/init.bat"
+)
+
+add_custom_command(
+    OUTPUT  "${SHIMS_H}"
+    COMMAND "${CMAKE_COMMAND}" -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateShims.cmake"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shims"
+            "${SHIMS_H}"
+    DEPENDS ${SHIM_SRCS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateShims.cmake"
+    COMMENT "Generating shims.h from shims/ ..."
+    VERBATIM
+)
+
+add_custom_target(shims_h DEPENDS "${SHIMS_H}")
+
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
+add_dependencies(${PROJECT_NAME} shims_h)
 target_include_directories(${PROJECT_NAME} PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} ${LINK_LIBS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC

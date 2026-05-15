@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <uv.h>
 
+#include "notify.h"
 #include "pty.h"
 #include "compat.h"
 
@@ -62,6 +63,7 @@ typedef struct session {
   pid_t root_pid;
   bool detached;
   struct session *next;
+  notify_ctx_t *notify;
 } session_t;
 
 struct pss_tty {
@@ -96,6 +98,8 @@ struct pss_tty {
   char current_favicon_formula[256];
   char pending_favicon[256];
   bool pending_favicon_send;
+
+  notify_ctx_t *notify;
 
   pid_t last_fgpid;
 };

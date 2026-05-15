@@ -1,0 +1,7 @@
+# tabsh notification shim init
+if [ -f ~/.bashrc ]; then
+  . ~/.bashrc
+fi
+if [ -n "$TABSH_SHIM_DIR" ]; then
+  export PATH="$TABSH_SHIM_DIR:$PATH"
+fi

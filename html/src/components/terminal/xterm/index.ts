@@ -327,6 +327,26 @@ export class Xterm {
             return true;
         });
 
+        terminal.parser.registerOscHandler(777, data => {
+            const parts = data.split(';');
+            if (parts[0] === 'notify' && parts.length >= 3) {
+                const title = parts[1];
+                const body = parts.slice(2).join(';');
+                const show = () => {
+                    const notification = new Notification(title, { body });
+                    notification.onclick = () => window.focus();
+                };
+                if (Notification.permission === 'granted') {
+                    show();
+                } else if (Notification.permission !== 'denied') {
+                    Notification.requestPermission().then(p => {
+                        if (p === 'granted') show();
+                    });
+                }
+            }
+            return true;
+        });
+
         terminal.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
             if (ev.type !== 'keydown') return true;
 

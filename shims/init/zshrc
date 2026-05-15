@@ -1,0 +1,15 @@
+# tabsh notification shim init
+TABSH_ORIG_ZDOTDIR="${TABSH_ORIG_ZDOTDIR:-$HOME}"
+if [ -f "$TABSH_ORIG_ZDOTDIR/.zprofile" ]; then
+  . "$TABSH_ORIG_ZDOTDIR/.zprofile"
+elif [ -f ~/.zprofile ]; then
+  . ~/.zprofile
+fi
+if [ -f "$TABSH_ORIG_ZDOTDIR/.zshrc" ]; then
+  . "$TABSH_ORIG_ZDOTDIR/.zshrc"
+elif [ -f ~/.zshrc ]; then
+  . ~/.zshrc
+fi
+if [ -n "$TABSH_SHIM_DIR" ]; then
+  export PATH="$TABSH_SHIM_DIR:$PATH"
+fi
