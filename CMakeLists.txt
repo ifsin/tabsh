@@ -33,7 +33,20 @@ else()
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _GNU_SOURCE)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty.c src/session.c src/favicon.c src/notify.c src/protocol.c src/http.c src/server.c)
+if(WIN32)
+    set(PTY_BACKEND src/pty_win32.c)
+else()
+    set(PTY_BACKEND src/pty_unix.c)
+endif()
+
+set(SOURCE_FILES src/utils.c src/pty_common.c ${PTY_BACKEND} src/session.c src/favicon.c src/notify.c src/protocol.c src/http.c src/server.c src/terminal.c)
+
+# --- vendored libvterm (built as a static library) ---
+file(GLOB LIBVTERM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libvterm/src/*.c")
+add_library(vterm STATIC ${LIBVTERM_SOURCES})
+target_include_directories(vterm PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libvterm/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libvterm/src")
 
 include(FindPackageHandleStandardArgs)
 
@@ -70,6 +83,8 @@ if(MSVC)
 else()
     set(LINK_LIBS ${ZLIB_LIBRARIES} ${LIBWEBSOCKETS_LIBRARIES} ${JSON-C_LIBRARIES} ${LIBUV_LIBRARIES})
 endif()
+list(APPEND LINK_LIBS vterm)
+list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libvterm/include")
 
 set (CMAKE_REQUIRED_INCLUDES ${INCLUDE_DIRS})
 include(CheckSymbolExists)

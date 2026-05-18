@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "tabsh",
+  "version-string": "1.8.3",
+  "description": "Share your terminal over the web (libvterm + canvas)",
+  "homepage": "https://github.com/ifsin/tabsh",
+  "dependencies": [
+    "libuv",
+    "json-c",
+    "zlib",
+    {
+      "name": "libwebsockets",
+      "features": ["libuv"]
+    },
+    {
+      "name": "getopt",
+      "platform": "windows"
+    }
+  ],
+  "builtin-baseline": "2024.10.21"
+}

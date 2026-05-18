@@ -18,6 +18,7 @@
 #include "notify.h"
 #include "pty.h"
 #include "server.h"
+#include "terminal.h"
 #include "utils.h"
 
 // initial message list
@@ -199,7 +200,7 @@ static bool check_host_origin(struct lws *wsi) {
 
 #ifndef _WIN32
 static void check_foreground_process(struct pss_tty *pss) {
-  pid_t fgpid = pss->process ? tcgetpgrp(pss->process->pty) : -1;
+  pid_t fgpid = pss->process ? pty_get_fg_pid(pss->process) : -1;
   if (fgpid <= 0) return;
   if (fgpid == pss->last_fgpid) return;
   pss->last_fgpid = fgpid;
@@ -284,7 +285,14 @@ static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
     check_foreground_process(session->pss);
 #endif
     pty_ring_write(buf->base, buf->len);
-    session->pss->pty_buf = buf;
+    if (session->pss->cell_diff_enabled && session->terminal != NULL) {
+      bool changed = terminal_push(session->terminal, buf->base, buf->len);
+      pty_buf_free(buf);
+      if (changed) session->pss->pending_frame = true;
+      pty_resume(process);
+    } else {
+      session->pss->pty_buf = buf;
+    }
   }
   lws_callback_on_writable(session->pss->wsi);
 }
@@ -316,6 +324,10 @@ done:
   if (session->timer != NULL) {
     uv_timer_stop(session->timer);
     uv_close((uv_handle_t *)session->timer, (uv_close_cb)free);
+  }
+  if (session->terminal != NULL) {
+    terminal_destroy(session->terminal);
+    session->terminal = NULL;
   }
   free(session);
 
@@ -485,6 +497,8 @@ static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t 
   }
   lwsl_notice("started process, pid: %d\n", process->pid);
   session->root_pid = process->pid;
+  session->terminal = terminal_create(process->rows ? process->rows : 24,
+                                      process->columns ? process->columns : 80, pss);
   pss->process = process;
   pss->session = session;
   strncpy(pss->session_id, session_id, SESSION_ID_LEN - 1);
@@ -538,6 +552,10 @@ static void attach_session(struct pss_tty *pss, session_t *session) {
   session_attach(session, pss);
   pss->process = session->process;
   pss->session = session;
+  if (pss->cell_diff_enabled && session->terminal != NULL) {
+    terminal_mark_all_dirty(session->terminal);
+    pss->pending_frame = true;
+  }
   lws_callback_on_writable(pss->wsi);
 }
 
@@ -664,6 +682,36 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         pss->pty_buf = NULL;
         pty_resume(pss->process);
       }
+
+      if (pss->session != NULL && pss->session->terminal != NULL) {
+        /* drain scrollback BEFORE cell-diff so client appends history before refresh */
+        size_t sblen;
+        const unsigned char *sb;
+        while ((sb = terminal_take_sb_line(pss->session->terminal, &sblen)) != NULL) {
+          if (lws_write(wsi, (unsigned char *)sb, sblen, LWS_WRITE_BINARY) < (int)sblen) {
+            lwsl_err("write SB_PUSH\n");
+            break;
+          }
+        }
+      }
+
+      if (pss->pending_frame && pss->session != NULL && pss->session->terminal != NULL) {
+        pss->pending_frame = false;
+        size_t frame_len;
+        const unsigned char *frame = terminal_encode_frame(pss->session->terminal, &frame_len);
+        if (lws_write(wsi, (unsigned char *)frame, frame_len, LWS_WRITE_BINARY) < (int)frame_len)
+          lwsl_err("write CELL_DIFF\n");
+      }
+
+      if (pss->session != NULL && pss->session->terminal != NULL) {
+        uint8_t mode = 0;
+        if (terminal_take_mouse_mode_change(pss->session->terminal, &mode)) {
+          unsigned char buf2[LWS_PRE + 2];
+          buf2[LWS_PRE]     = MOUSE_MODE;
+          buf2[LWS_PRE + 1] = mode;
+          lws_write(wsi, &buf2[LWS_PRE], 2, LWS_WRITE_BINARY);
+        }
+      }
       break;
 
     case LWS_CALLBACK_RECEIVE:
@@ -704,6 +752,12 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
           json_object_put(
               parse_window_size(pss->buffer + 1, pss->len - 1, &pss->process->columns, &pss->process->rows));
           pty_resize(pss->process);
+          if (pss->cell_diff_enabled && pss->session != NULL && pss->session->terminal != NULL) {
+            terminal_resize(pss->session->terminal, pss->process->rows, pss->process->columns);
+            terminal_mark_all_dirty(pss->session->terminal);
+            pss->pending_frame = true;
+            lws_callback_on_writable(pss->wsi);
+          }
           break;
         case PAUSE:
           pty_pause(pss->process);
@@ -734,6 +788,11 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
               return -1;
             }
           }
+
+          struct json_object *cdiff = NULL;
+          if (json_object_object_get_ex(obj, "cellDiff", &cdiff) &&
+              json_object_get_boolean(cdiff))
+            pss->cell_diff_enabled = true;
 
           struct json_object *sid = NULL;
           const char *client_session_id = NULL;

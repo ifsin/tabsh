@@ -25,6 +25,9 @@
 #define SET_APP_COMMAND '3'
 #define SET_REATTACHED '4'
 #define SET_APP_FAVICON '5'
+#define CELL_DIFF '6'
+#define SB_PUSH '7'
+#define MOUSE_MODE '8'
 
 // url paths
 struct endpoints {
@@ -54,6 +57,7 @@ struct pss_http {
 #define APP_COMMAND_LEN 4096
 
 struct pss_tty;
+struct terminal_s;
 
 typedef struct session {
   char id[SESSION_ID_LEN];
@@ -64,6 +68,7 @@ typedef struct session {
   bool detached;
   struct session *next;
   notify_ctx_t *notify;
+  struct terminal_s *terminal;
 } session_t;
 
 struct pss_tty {
@@ -102,6 +107,9 @@ struct pss_tty {
   notify_ctx_t *notify;
 
   pid_t last_fgpid;
+
+  bool cell_diff_enabled;
+  bool pending_frame;
 };
 
 struct server {

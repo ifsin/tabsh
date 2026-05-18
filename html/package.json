@@ -52,23 +52,9 @@
     "webpack-merge": "^5.10.0"
   },
   "dependencies": {
-    "@xterm/addon-canvas": "^0.7.0",
-    "@xterm/addon-clipboard": "^0.1.0",
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/addon-image": "^0.8.0",
-    "@xterm/addon-unicode11": "^0.8.0",
-    "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/addon-webgl": "^0.18.0",
-    "@xterm/xterm": "^5.5.0",
     "decko": "^1.2.0",
-    "file-saver": "^2.0.5",
     "preact": "^10.19.6",
-    "trzsz": "^1.1.5",
-    "whatwg-fetch": "^3.6.20",
-    "zmodem.js": "^0.1.10"
-  },
-  "resolutions": {
-    "zmodem.js@^0.1.10": "patch:zmodem.js@npm%3A0.1.10#./.yarn/patches/zmodem.js-npm-0.1.10-e5537fa2ed.patch"
+    "whatwg-fetch": "^3.6.20"
   },
   "packageManager": "yarn@3.6.3"
 }
