@@ -662,7 +662,8 @@ export class Xterm {
     private onBeforeUnload(e: BeforeUnloadEvent) {
         if (this.socket?.readyState === WebSocket.OPEN) {
             e.preventDefault();
-            e.returnValue = '';
+            const event = e as BeforeUnloadEvent & { returnValue: string };
+            event.returnValue = '';
         }
     }
 

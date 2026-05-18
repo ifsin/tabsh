@@ -1,11 +1,14 @@
-const path = require('path');
-const { merge } = require('webpack-merge');
-const ESLintPlugin = require('eslint-webpack-plugin');
-const CopyWebpackPlugin = require('copy-webpack-plugin');
-const HtmlWebpackPlugin = require('html-webpack-plugin');
-const MiniCssExtractPlugin = require('mini-css-extract-plugin');
-const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
-const TerserPlugin = require('terser-webpack-plugin');
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { merge } from 'webpack-merge';
+import ESLintPlugin from 'eslint-webpack-plugin';
+import CopyWebpackPlugin from 'copy-webpack-plugin';
+import HtmlWebpackPlugin from 'html-webpack-plugin';
+import MiniCssExtractPlugin from 'mini-css-extract-plugin';
+import CssMinimizerPlugin from 'css-minimizer-webpack-plugin';
+import TerserPlugin from 'terser-webpack-plugin';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const devMode = process.env.NODE_ENV !== 'production';
 
@@ -27,7 +30,16 @@ const baseConfig = {
             },
             {
                 test: /\.s?[ac]ss$/,
-                use: [devMode ? 'style-loader' : MiniCssExtractPlugin.loader, 'css-loader', 'sass-loader'],
+                use: [
+                    devMode ? 'style-loader' : MiniCssExtractPlugin.loader,
+                    'css-loader',
+                    {
+                        loader: 'sass-loader',
+                        options: {
+                            api: 'modern',
+                        },
+                    },
+                ],
             },
         ],
     },
@@ -98,4 +110,4 @@ const prodConfig = {
     devtool: 'source-map',
 };
 
-module.exports = merge(baseConfig, devMode ? devConfig : prodConfig);
+export default merge(baseConfig, devMode ? devConfig : prodConfig);

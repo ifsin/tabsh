@@ -1,6 +1,8 @@
-module.exports = {
-  ...require('gts/.prettierrc.json'),
-  "bracketSpacing": true,
-  "tabWidth": 4,
-  "printWidth": 120,
-}
+import gtsConfig from 'gts/.prettierrc.json' with { type: 'json' };
+
+export default {
+    ...gtsConfig,
+    bracketSpacing: true,
+    tabWidth: 4,
+    printWidth: 120,
+};

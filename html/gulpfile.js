@@ -1,9 +1,13 @@
-const { src, dest, task, series } = require('gulp');
-const clean = require('gulp-clean');
-const gzip = require('gulp-gzip');
-const inlineSource = require('gulp-inline-source');
-const rename = require('gulp-rename');
-const through2 = require('through2');
+import { promises as fs } from 'fs';
+import { dirname, resolve, join } from 'path';
+import { fileURLToPath } from 'url';
+import { gzipSync } from 'zlib';
+import gulp from 'gulp';
+
+const { task, series } = gulp;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const distDir = resolve(__dirname, 'dist');
+const headerPath = resolve(__dirname, '../src/html.h');
 
 const genHeader = (size, buf, len) => {
     let idx = 0;
@@ -30,39 +34,66 @@ const genHeader = (size, buf, len) => {
     data += `unsigned int index_html_size = ${size};\n`;
     return data;
 };
-let fileSize = 0;
 
-task('clean', () => {
-    return src('dist', { read: false, allowEmpty: true }).pipe(clean());
+const readDistFile = async filename => {
+    return fs.readFile(join(distDir, filename));
+};
+
+task('clean', async () => {
+    await fs.rm(distDir, { recursive: true, force: true });
 });
 
-task('inline', () => {
-    const options = {
-        compress: false,
-    };
+task('inline', async () => {
+    let html = await fs.readFile(join(distDir, 'index.html'), 'utf8');
 
-    return src('dist/index.html').pipe(inlineSource(options)).pipe(rename('inline.html')).pipe(dest('dist/'));
+    html = await replaceAsync(
+        html,
+        /<link inline rel="icon" type="([^"]+)" href="([^"]+)">/g,
+        async (_match, type, href) => {
+            const data = await readDistFile(href);
+            return `<link rel="icon" type="${type}" href="data:${type};base64,${data.toString('base64')}">`;
+        },
+    );
+
+    html = await replaceAsync(
+        html,
+        /<link inline rel="stylesheet" type="text\/css" href="([^"]+)">/g,
+        async (_match, href) => {
+            const css = await fs.readFile(join(distDir, href), 'utf8');
+            return `<style type="text/css">${css}</style>`;
+        },
+    );
+
+    html = await replaceAsync(
+        html,
+        /<script inline type="text\/javascript" src="([^"]+)"><\/script>/g,
+        async (_match, src) => {
+            const js = await fs.readFile(join(distDir, src), 'utf8');
+            return `<script type="text/javascript">${js}</script>`;
+        },
+    );
+
+    await fs.writeFile(join(distDir, 'inline.html'), html);
 });
 
 task(
     'default',
-    series('inline', () => {
-        return src('dist/inline.html')
-            .pipe(
-                through2.obj((file, enc, cb) => {
-                    fileSize = file.contents.length;
-                    return cb(null, file);
-                })
-            )
-            .pipe(gzip())
-            .pipe(
-                through2.obj((file, enc, cb) => {
-                    const buf = file.contents;
-                    file.contents = Buffer.from(genHeader(fileSize, buf, buf.length));
-                    return cb(null, file);
-                })
-            )
-            .pipe(rename('html.h'))
-            .pipe(dest('../src/'));
-    })
+    series('inline', async () => {
+        const html = await fs.readFile(join(distDir, 'inline.html'));
+        const gzipped = gzipSync(html);
+        await fs.rm(headerPath, { force: true });
+        await fs.writeFile(headerPath, genHeader(html.length, gzipped, gzipped.length));
+    }),
 );
+
+const replaceAsync = async (str, regex, asyncFn) => {
+    const promises = [];
+
+    str.replace(regex, (...args) => {
+        promises.push(asyncFn(...args));
+        return '';
+    });
+
+    const replacements = await Promise.all(promises);
+    return str.replace(regex, () => replacements.shift());
+};

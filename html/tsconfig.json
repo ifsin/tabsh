@@ -1,15 +1,18 @@
 {
   "extends": "./node_modules/gts/tsconfig-google.json",
   "compilerOptions": {
-    "moduleResolution": "node",
+    "module": "es2015",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "jsx": "react",
     "jsxFactory": "h",
     "allowJs": true,
     "noImplicitAny": false,
+    "composite": false,
     "declaration": false,
     "experimentalDecorators": true,
     "strictPropertyInitialization": false,
+    "types": ["node"],
     "lib": ["es2019", "dom"],
   },
   "include": [

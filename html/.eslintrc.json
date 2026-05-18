@@ -5,9 +5,6 @@
       "files": ["**/*.ts", "**/*.tsx"],
       "parserOptions": {
         "jsxPragma": "h"
-      },
-      "rules": {
-        "@typescript-eslint/no-duplicate-enum-values": "off"
       }
     },
     {
