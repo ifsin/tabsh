@@ -41,6 +41,9 @@ typedef struct terminal_s {
   uint8_t mouse_mode;          /* libvterm mouse mode: 0/1/2/3 */
   bool    mouse_mode_changed;
 
+  uint8_t altscreen_active;    /* 0=primary, 1=alt */
+  bool    altscreen_changed;
+
   /* scrollback queue: lines that have been pushed off the top */
   sb_line_t *sb_head;
   sb_line_t *sb_tail;
@@ -58,6 +61,7 @@ void                 terminal_resize(terminal_t *term, uint16_t rows, uint16_t c
 const unsigned char *terminal_encode_frame(terminal_t *term, size_t *out_len);
 void                 terminal_mark_all_dirty(terminal_t *term);
 bool                 terminal_take_mouse_mode_change(terminal_t *term, uint8_t *out_mode);
+bool                 terminal_take_altscreen_change(terminal_t *term, uint8_t *out);
 /* Encode + dequeue one pending scrollback line. Returns NULL if none queued.
  * Pointer is valid until next call; do not free.  */
 const unsigned char *terminal_take_sb_line(terminal_t *term, size_t *out_len);

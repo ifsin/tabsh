@@ -16,3 +16,13 @@ body {
     height: calc(100% - 10px);
   }
 }
+
+.scroll-wrap {
+  overflow-y: auto;
+  height: 100%;
+  position: relative;
+}
+
+.scroll-inner {
+  position: relative;
+}

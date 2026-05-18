@@ -19,6 +19,10 @@ static int screen_damage(VTermRect rect, void *user) {
       VTermPos pos = {.row = row, .col = col};
       vterm_screen_get_cell(screen, pos, &cell);
 
+      /* 0xFFFFFFFF is libvterm's sentinel for the right-half of a wide cell.
+       * The left cell (width=2) already tells the client to paint 2 columns. */
+      if (cell.chars[0] == 0xFFFFFFFFu) continue;
+
       VTermColor fg = cell.fg;
       VTermColor bg = cell.bg;
       vterm_screen_convert_color_to_rgb(screen, &fg);
@@ -38,6 +42,27 @@ static int screen_damage(VTermRect rect, void *user) {
           (cell.attrs.reverse   ? 0x10 : 0) |
           (cell.attrs.strike    ? 0x20 : 0));
       e->width = (uint8_t)(cell.width ? cell.width : 1);
+
+      /* For wide cells, explicitly enqueue col+1 when it falls outside the damage
+       * rect — libvterm may stop the rect at col N and never iterate col N+1. */
+      if (cell.width == 2 && col + 1 >= rect.end_col && col + 1 < term->cols) {
+        if (term->dirty_count < TERM_MAX_CELLS) {
+          VTermScreenCell nc;
+          VTermPos npos = {.row = row, .col = col + 1};
+          vterm_screen_get_cell(screen, npos, &nc);
+          if (nc.chars[0] != 0xFFFFFFFFu) {
+            VTermColor nfg = nc.fg, nbg = nc.bg;
+            vterm_screen_convert_color_to_rgb(screen, &nfg);
+            vterm_screen_convert_color_to_rgb(screen, &nbg);
+            cell_entry_t *ne = &term->dirty[term->dirty_count++];
+            ne->row = (uint16_t)row; ne->col = (uint16_t)(col + 1);
+            ne->codepoint = nc.chars[0] ? nc.chars[0] : 0x20;
+            ne->fg_r = nfg.rgb.red; ne->fg_g = nfg.rgb.green; ne->fg_b = nfg.rgb.blue;
+            ne->bg_r = nbg.rgb.red; ne->bg_g = nbg.rgb.green; ne->bg_b = nbg.rgb.blue;
+            ne->attrs = 0; ne->width = 1;
+          }
+        }
+      }
     }
   }
   return 1;
@@ -81,7 +106,7 @@ static int screen_sb_pushline(int cols, const VTermScreenCell *cells, void *user
     vterm_screen_convert_color_to_rgb(term->screen, &bg);
     cell_entry_t *e = &line->cells[c];
     e->row = 0; e->col = (uint16_t)c;
-    e->codepoint = cell.chars[0] ? cell.chars[0] : 0x20;
+    e->codepoint = (cell.chars[0] == 0 || cell.chars[0] == 0xFFFFFFFFu) ? 0x20 : cell.chars[0];
     e->fg_r = fg.rgb.red; e->fg_g = fg.rgb.green; e->fg_b = fg.rgb.blue;
     e->bg_r = bg.rgb.red; e->bg_g = bg.rgb.green; e->bg_b = bg.rgb.blue;
     e->attrs = (uint8_t)(
@@ -111,6 +136,13 @@ static int screen_settermprop(VTermProp prop, VTermValue *val, void *user) {
     if (new_mode != term->mouse_mode) {
       term->mouse_mode = new_mode;
       term->mouse_mode_changed = true;
+    }
+  }
+  if (prop == VTERM_PROP_ALTSCREEN) {
+    uint8_t new_v = val->boolean ? 1 : 0;
+    if (new_v != term->altscreen_active) {
+      term->altscreen_active  = new_v;
+      term->altscreen_changed = true;
     }
   }
   return 1;
@@ -170,6 +202,13 @@ bool terminal_take_mouse_mode_change(terminal_t *term, uint8_t *out_mode) {
   if (!term->mouse_mode_changed) return false;
   term->mouse_mode_changed = false;
   *out_mode = term->mouse_mode;
+  return true;
+}
+
+bool terminal_take_altscreen_change(terminal_t *term, uint8_t *out) {
+  if (!term->altscreen_changed) return false;
+  term->altscreen_changed = false;
+  *out = term->altscreen_active;
   return true;
 }
 

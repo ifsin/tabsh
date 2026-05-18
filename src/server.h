@@ -28,6 +28,7 @@
 #define CELL_DIFF '6'
 #define SB_PUSH '7'
 #define MOUSE_MODE '8'
+#define ALT_SCREEN '9'
 
 // url paths
 struct endpoints {
@@ -110,6 +111,9 @@ struct pss_tty {
 
   bool cell_diff_enabled;
   bool pending_frame;
+
+  bool pending_altscreen_send;
+  uint8_t pending_altscreen_value;
 };
 
 struct server {

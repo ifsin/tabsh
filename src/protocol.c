@@ -635,6 +635,11 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
               mm[LWS_PRE]     = MOUSE_MODE;
               mm[LWS_PRE + 1] = pss->session->terminal->mouse_mode;
               lws_write(wsi, &mm[LWS_PRE], 2, LWS_WRITE_BINARY);
+              /* Re-send altscreen state for the same reason. */
+              unsigned char as[LWS_PRE + 2];
+              as[LWS_PRE]     = ALT_SCREEN;
+              as[LWS_PRE + 1] = pss->session->terminal->altscreen_active;
+              lws_write(wsi, &as[LWS_PRE], 2, LWS_WRITE_BINARY);
             }
             uv_timer_t *t = xmalloc(sizeof(uv_timer_t));
             uv_timer_init(server->loop, t);
@@ -656,6 +661,16 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->lws_close_status > LWS_CLOSE_STATUS_NOSTATUS) {
         lws_close_reason(wsi, pss->lws_close_status, NULL, 0);
         return 1;
+      }
+
+      if (pss->pending_altscreen_send) {
+        pss->pending_altscreen_send = false;
+        unsigned char as[LWS_PRE + 2];
+        as[LWS_PRE]     = ALT_SCREEN;
+        as[LWS_PRE + 1] = pss->pending_altscreen_value;
+        lws_write(wsi, &as[LWS_PRE], 2, LWS_WRITE_BINARY);
+        lws_callback_on_writable(pss->wsi);
+        break;
       }
 
 #ifndef _WIN32
@@ -717,6 +732,15 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
           buf2[LWS_PRE]     = MOUSE_MODE;
           buf2[LWS_PRE + 1] = mode;
           lws_write(wsi, &buf2[LWS_PRE], 2, LWS_WRITE_BINARY);
+        }
+        /* Defer ALT_SCREEN to its own writable callback to avoid multiple lws_write
+         * calls per callback — libwebsockets expects at most one write per invocation. */
+        uint8_t altv = 0;
+        if (terminal_take_altscreen_change(pss->session->terminal, &altv)) {
+          pss->pending_altscreen_send  = true;
+          pss->pending_altscreen_value = altv;
+          pss->pending_frame           = true;
+          lws_callback_on_writable(pss->wsi);
         }
       }
       break;

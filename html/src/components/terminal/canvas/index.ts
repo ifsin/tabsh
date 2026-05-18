@@ -2,8 +2,9 @@
 // this file just paints cell-diff frames and ships keystrokes back.
 import { bind } from 'decko';
 
-enum Cmd {
-    OUTPUT_LEGACY = '0', // unused in cell-diff mode
+// Commands server → client
+const enum S2C {
+    OUTPUT_LEGACY = '0',
     SET_WINDOW_TITLE = '1',
     SET_PREFERENCES = '2',
     SET_APP_COMMAND = '3',
@@ -12,7 +13,11 @@ enum Cmd {
     CELL_DIFF = '6',
     SB_PUSH = '7',
     MOUSE_MODE = '8',
+    ALT_SCREEN = '9',
+}
 
+// Commands client → server
+const enum C2S {
     INPUT = '0',
     RESIZE_TERMINAL = '1',
     PAUSE = '2',
@@ -85,6 +90,8 @@ const SB_MAX_LINES = 10000;
 
 class CanvasRenderer {
     canvas: HTMLCanvasElement;
+    scrollWrap: HTMLDivElement;
+    private scrollInner: HTMLDivElement;
     private ctx: CanvasRenderingContext2D;
     private grid: Cell[][] = [];
     rows = 24;
@@ -100,8 +107,17 @@ class CanvasRenderer {
     private fgDefault: [number, number, number];
     private bgDefault: [number, number, number];
     private cursorColor: [number, number, number];
+    private fontNormal = '';
+    private fontBold = '';
+    private fontItalic = '';
+    private fontBoldItalic = '';
     scrollback: Cell[][] = [];
-    scrollOffset = 0; // how many rows from latest we've scrolled up
+    // droppedCount = total lines ever evicted from sb head; keeps absLine stable.
+    private droppedCount = 0;
+    // viewFirstLine = absolute line index at the top of the canvas viewport.
+    viewFirstLine = 0;
+    private altScreenActive = false;
+    sel?: { aLine: number; aCol: number; fLine: number; fCol: number };
 
     constructor(parent: HTMLElement, fontSize: number, fontFamily: string, theme: { foreground?: string; background?: string; cursor?: string }) {
         this.fontSize = fontSize;
@@ -111,31 +127,42 @@ class CanvasRenderer {
         this.cursorColor = parseHexColor(theme.cursor);
         this.dpr = window.devicePixelRatio || 1;
 
+        this.scrollWrap = document.createElement('div');
+        this.scrollWrap.className = 'scroll-wrap';
+
+        this.scrollInner = document.createElement('div');
+        this.scrollInner.className = 'scroll-inner';
+
         this.canvas = document.createElement('canvas');
         this.canvas.tabIndex = 0;
-        this.canvas.style.display = 'block';
-        this.canvas.style.outline = 'none';
+        this.canvas.style.cssText = 'display:block;outline:none;position:sticky;top:0';
         this.canvas.style.backgroundColor = `rgb(${this.bgDefault.join(',')})`;
         parent.style.backgroundColor = `rgb(${this.bgDefault.join(',')})`;
-        parent.appendChild(this.canvas);
+
+        this.scrollInner.appendChild(this.canvas);
+        this.scrollWrap.appendChild(this.scrollInner);
+        parent.appendChild(this.scrollWrap);
 
         this.ctx = this.canvas.getContext('2d')!;
         this.measureCell();
+
+        this.scrollWrap.addEventListener('scroll', () => this.onScroll(), { passive: true });
     }
 
     private measureCell() {
-        this.ctx.font = `${this.fontSize}px ${this.fontFamily}`;
+        this.fontNormal = `${this.fontSize}px ${this.fontFamily}`;
+        this.fontBold = `bold ${this.fontSize}px ${this.fontFamily}`;
+        this.fontItalic = `italic ${this.fontSize}px ${this.fontFamily}`;
+        this.fontBoldItalic = `italic bold ${this.fontSize}px ${this.fontFamily}`;
+
+        this.ctx.font = this.fontNormal;
         const m = this.ctx.measureText('M');
-        // Snap to physical pixel so col*cellW always lands on an exact physical boundary.
         this.cellW = Math.round(Math.max(1, Math.round(m.width)) * this.dpr) / this.dpr;
         this.cellH = Math.round(Math.max(1, Math.round(this.fontSize * 1.3)) * this.dpr) / this.dpr;
     }
 
-    focus() {
-        this.canvas.focus();
-    }
+    focus() { this.canvas.focus(); }
 
-    // Recompute rows/cols from container pixel size; resize canvas + grid.
     fit(width: number, height: number): { cols: number; rows: number } {
         const cols = Math.max(1, Math.floor(width / this.cellW));
         const rows = Math.max(1, Math.floor(height / this.cellH));
@@ -163,53 +190,161 @@ class CanvasRenderer {
         this.canvas.height = Math.round(h * this.dpr);
         this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         this.ctx.textBaseline = 'top';
-        this.repaintAll();
+
+        this.updateInnerHeight();
+        this.viewFirstLine = this.droppedCount + Math.floor(this.scrollWrap.scrollTop / this.cellH);
+        this.repaintViewport();
         return { cols, rows };
     }
 
-    repaintAll() {
+    private updateInnerHeight() {
+        if (this.altScreenActive) {
+            this.scrollInner.style.height = `${this.rows * this.cellH}px`;
+        } else {
+            this.scrollInner.style.height = `${(this.scrollback.length + this.rows) * this.cellH}px`;
+        }
+    }
+
+    // scrollTop = sb.length * cellH means grid[0] is at the top → we're at the live screen.
+    private isAtBottom(): boolean {
+        const target = this.scrollback.length * this.cellH;
+        return this.scrollWrap.scrollTop >= target - this.cellH;
+    }
+
+    private setScrollTop(top: number) {
+        this.scrollWrap.scrollTop = top;
+        // Programmatic scrollTop changes don't fire scroll events; sync manually.
+        this.viewFirstLine = this.droppedCount + Math.floor(top / this.cellH);
+    }
+
+    private snapToBottom() {
+        this.setScrollTop(this.scrollback.length * this.cellH);
+    }
+
+    private onScroll() {
+        const firstLine = this.droppedCount + Math.floor(this.scrollWrap.scrollTop / this.cellH);
+        if (firstLine !== this.viewFirstLine) {
+            this.viewFirstLine = firstLine;
+            this.repaintViewport();
+        }
+    }
+
+    repaintViewport() {
         this.ctx.fillStyle = `rgb(${this.bgDefault.join(',')})`;
         this.ctx.fillRect(0, 0, this.cols * this.cellW, this.rows * this.cellH);
 
-        // Composite view: top of view comes from scrollback when scrollOffset > 0.
-        // Logical "total" rows = scrollback.length + this.rows (grid is "below" scrollback).
         const sbLen = this.scrollback.length;
         for (let viewRow = 0; viewRow < this.rows; viewRow++) {
-            const absolute = sbLen - this.scrollOffset + viewRow;
-            for (let c = 0; c < this.cols; c++) {
+            const absLine = this.viewFirstLine + viewRow;
+            const sbIdx = absLine - this.droppedCount;
+            for (let col = 0; col < this.cols; col++) {
                 let cell: Cell;
-                if (absolute < sbLen) {
-                    const sbRow = this.scrollback[absolute];
-                    cell = (sbRow && sbRow[c]) ? sbRow[c] : blankCell(this.fgDefault, this.bgDefault);
+                if (sbIdx < 0) {
+                    cell = blankCell(this.fgDefault, this.bgDefault);
+                } else if (sbIdx < sbLen) {
+                    cell = this.scrollback[sbIdx]?.[col] ?? blankCell(this.fgDefault, this.bgDefault);
                 } else {
-                    const gridIdx = absolute - sbLen;
-                    cell = (this.grid[gridIdx] && this.grid[gridIdx][c]) ? this.grid[gridIdx][c] : blankCell(this.fgDefault, this.bgDefault);
+                    cell = this.grid[sbIdx - sbLen]?.[col] ?? blankCell(this.fgDefault, this.bgDefault);
                 }
-                this.paintCellAt(viewRow, c, cell, false);
+                this.paintCellAt(viewRow, col, cell, false);
             }
         }
-        if (this.scrollOffset === 0) this.paintCursor();
+
+        // Draw cursor only when it falls within the visible viewport.
+        const cursorAbsLine = this.droppedCount + sbLen + this.cursorRow;
+        if (this.cursorVisible &&
+            cursorAbsLine >= this.viewFirstLine &&
+            cursorAbsLine < this.viewFirstLine + this.rows &&
+            this.cursorRow < this.rows && this.cursorCol < this.cols) {
+            const cursorViewRow = cursorAbsLine - this.viewFirstLine;
+            const cell = this.grid[this.cursorRow]?.[this.cursorCol];
+            if (cell) this.paintCellAtXY(this.cursorCol * this.cellW, cursorViewRow * this.cellH, cell, true);
+        }
+
+        this.paintSelectionOverlay();
+    }
+
+    private paintSelectionOverlay() {
+        if (!this.sel) return;
+        const { aLine, aCol, fLine, fCol } = this.sel;
+        const startLine = Math.min(aLine, fLine);
+        const endLine = Math.max(aLine, fLine);
+        const startCol = aLine <= fLine ? aCol : fCol;
+        const endCol = aLine <= fLine ? fCol : aCol;
+
+        this.ctx.fillStyle = 'rgba(80, 140, 220, 0.35)';
+        const visStart = Math.max(startLine, this.viewFirstLine);
+        const visEnd = Math.min(endLine, this.viewFirstLine + this.rows - 1);
+        for (let absLine = visStart; absLine <= visEnd; absLine++) {
+            const viewRow = absLine - this.viewFirstLine;
+            let sc: number, ec: number;
+            if (startLine === endLine) {
+                sc = Math.min(startCol, endCol);
+                ec = Math.max(startCol, endCol) + 1;
+            } else if (absLine === startLine) {
+                sc = startCol; ec = this.cols;
+            } else if (absLine === endLine) {
+                sc = 0; ec = endCol + 1;
+            } else {
+                sc = 0; ec = this.cols;
+            }
+            this.ctx.fillRect(sc * this.cellW, viewRow * this.cellH, (ec - sc) * this.cellW, this.cellH);
+        }
+    }
+
+    buildSelectionText(): string {
+        if (!this.sel) return '';
+        const { aLine, aCol, fLine, fCol } = this.sel;
+        const startLine = Math.min(aLine, fLine);
+        const endLine = Math.max(aLine, fLine);
+        const startCol = aLine <= fLine ? aCol : fCol;
+        const endCol = aLine <= fLine ? fCol : aCol;
+
+        const lines: string[] = [];
+        for (let absLine = startLine; absLine <= endLine; absLine++) {
+            const sbIdx = absLine - this.droppedCount;
+            let row: Cell[];
+            if (sbIdx < 0) { lines.push(''); continue; }
+            if (sbIdx < this.scrollback.length) {
+                row = this.scrollback[sbIdx] ?? [];
+            } else {
+                row = this.grid[sbIdx - this.scrollback.length] ?? [];
+            }
+            let sc = 0, ec = row.length - 1;
+            if (startLine === endLine) {
+                sc = Math.min(startCol, endCol); ec = Math.max(startCol, endCol);
+            } else if (absLine === startLine) {
+                sc = startCol; ec = row.length - 1;
+            } else if (absLine === endLine) {
+                ec = endCol;
+            }
+            let s = '';
+            for (let c = sc; c <= ec && c < row.length; c++) {
+                s += String.fromCodePoint(row[c]?.cp || 0x20);
+            }
+            lines.push(s.replace(/\s+$/, ''));
+        }
+        return lines.join('\n');
     }
 
     pushScrollback(line: Cell[]) {
+        const wasAtBottom = this.isAtBottom();
         this.scrollback.push(line);
         if (this.scrollback.length > SB_MAX_LINES) {
-            this.scrollback.splice(0, this.scrollback.length - SB_MAX_LINES);
+            const excess = this.scrollback.length - SB_MAX_LINES;
+            this.scrollback.splice(0, excess);
+            this.droppedCount += excess;
+            if (this.sel && Math.min(this.sel.aLine, this.sel.fLine) < this.droppedCount) {
+                this.sel = undefined;
+            }
+            if (!wasAtBottom) {
+                // Adjust scrollTop so the view stays on the same content after eviction.
+                const newTop = Math.max(0, this.scrollWrap.scrollTop - excess * this.cellH);
+                this.setScrollTop(newTop);
+            }
         }
-        // If user was scrolled into history, keep their view stable by bumping offset.
-        if (this.scrollOffset > 0) this.scrollOffset++;
-    }
-
-    scrollBy(rows: number) {
-        const max = this.scrollback.length;
-        const next = Math.max(0, Math.min(max, this.scrollOffset + rows));
-        if (next === this.scrollOffset) return;
-        this.scrollOffset = next;
-        this.repaintAll();
-    }
-
-    private paintCellAt(viewRow: number, col: number, cell: Cell, isCursor: boolean) {
-        this.paintCellAtXY(col * this.cellW, viewRow * this.cellH, cell, isCursor);
+        this.updateInnerHeight();
+        if (wasAtBottom) this.snapToBottom();
     }
 
     applyFrame(buf: ArrayBuffer) {
@@ -220,11 +355,22 @@ class CanvasRenderer {
         const count = v.getUint16(5, true);
         this.cursorVisible = (flags & 0x01) !== 0;
 
-        const scrolledAway = this.scrollOffset > 0;
+        const wasAtBottom = this.isAtBottom();
 
-        // Erase old cursor cell first (only if currently in view)
-        if (!scrolledAway && this.cursorRow < this.rows && this.cursorCol < this.cols) {
-            this.paintCell(this.cursorRow, this.cursorCol, this.grid[this.cursorRow][this.cursorCol], false);
+        // Pre-scan: clear selection if any incoming cell falls within it.
+        if (this.sel) {
+            const sbLen = this.scrollback.length;
+            const selMinLine = Math.min(this.sel.aLine, this.sel.fLine);
+            const selMaxLine = Math.max(this.sel.aLine, this.sel.fLine);
+            let scanO = 7;
+            for (let i = 0; i < count && this.sel; i++) {
+                const row = v.getUint16(scanO, true);
+                const absLine = this.droppedCount + sbLen + row;
+                if (absLine >= selMinLine && absLine <= selMaxLine) {
+                    this.sel = undefined;
+                }
+                scanO += 16; // CELL_SIZE
+            }
         }
 
         let o = 7;
@@ -240,19 +386,21 @@ class CanvasRenderer {
             const prev = this.grid[row][col];
             const cell: Cell = { cp, fr, fg, fb, br, bg, bb, attrs, width };
             this.grid[row][col] = cell;
-            if (!scrolledAway) {
-                this.paintCell(row, col, cell, false);
-                // If the old cell was wide, clear the right-half continuation cell so no ghost remains.
-                if (prev && prev.width >= 2 && col + 1 < this.cols) {
-                    const cont = this.grid[row][col + 1];
-                    this.paintCell(row, col + 1, cont, false);
-                }
+            if (width >= 2 && col + 1 < this.cols) {
+                this.grid[row][col + 1] = { cp: 0x20, fr, fg, fb, br, bg, bb, attrs: 0, width: 1 };
+            }
+            // If old cell was wide, clear col+1 so it doesn't ghost.
+            if (prev && prev.width >= 2 && col + 1 < this.cols) {
+                const cleared: Cell = { cp: 0x20, fr: cell.fr, fg: cell.fg, fb: cell.fb,
+                                        br: cell.br, bg: cell.bg, bb: cell.bb, attrs: 0, width: 1 };
+                this.grid[row][col + 1] = cleared;
             }
         }
 
         this.cursorRow = curRow;
         this.cursorCol = curCol;
-        if (!scrolledAway) this.paintCursor();
+        if (wasAtBottom) this.snapToBottom();
+        this.repaintViewport();
     }
 
     applySbPush(buf: ArrayBuffer) {
@@ -261,8 +409,7 @@ class CanvasRenderer {
         const line: Cell[] = [];
         let o = 2;
         for (let i = 0; i < cols; i++) {
-            // skip row(2) + col(2) = 4 bytes (we don't need them)
-            o += 4;
+            o += 4; // skip row(2) + col(2) — not needed for scrollback display
             const cp = v.getUint32(o, true); o += 4;
             const fr = v.getUint8(o++); const fg = v.getUint8(o++); const fb = v.getUint8(o++);
             const br = v.getUint8(o++); const bg = v.getUint8(o++); const bb = v.getUint8(o++);
@@ -272,8 +419,26 @@ class CanvasRenderer {
         this.pushScrollback(line);
     }
 
-    private paintCell(row: number, col: number, cell: Cell, isCursor: boolean) {
-        this.paintCellAtXY(col * this.cellW, row * this.cellH, cell, isCursor);
+    setAltScreen(on: boolean) {
+        this.altScreenActive = on;
+        if (on) {
+            this.scrollWrap.style.overflowY = 'hidden';
+            this.scrollInner.style.height = `${this.rows * this.cellH}px`;
+            this.scrollWrap.scrollTop = 0;
+            this.viewFirstLine = this.droppedCount + this.scrollback.length;
+            this.sel = undefined;
+        } else {
+            this.scrollWrap.style.overflowY = '';
+            this.updateInnerHeight();
+            this.snapToBottom();
+        }
+        this.repaintViewport();
+    }
+
+    get isAltScreen() { return this.altScreenActive; }
+
+    private paintCellAt(viewRow: number, col: number, cell: Cell, isCursor: boolean) {
+        this.paintCellAtXY(col * this.cellW, viewRow * this.cellH, cell, isCursor);
     }
 
     private paintCellAtXY(x: number, y: number, cell: Cell, isCursor: boolean) {
@@ -286,50 +451,62 @@ class CanvasRenderer {
             fr = this.bgDefault[0]; fg = this.bgDefault[1]; fb = this.bgDefault[2];
         }
 
-        const cellSpan = this.cellW * Math.max(1, cell.width || 1);
-        const cellH = this.cellH;
+        const wide = Math.max(1, cell.width || 1) > 1;
+        const cellSpan = wide ? this.cellW * 2 : this.cellW;
+
         this.ctx.fillStyle = `rgb(${br},${bg},${bb})`;
-        this.ctx.fillRect(x, y, cellSpan, cellH);
+        this.ctx.fillRect(x, y, cellSpan, this.cellH);
 
         if (cell.cp >= 0x20 && cell.cp !== 0xa0) {
-            const bold = (cell.attrs & ATTR_BOLD) ? 'bold ' : '';
-            const italic = (cell.attrs & ATTR_ITALIC) ? 'italic ' : '';
-            this.ctx.font = `${italic}${bold}${this.fontSize}px ${this.fontFamily}`;
+            const bold = (cell.attrs & ATTR_BOLD) !== 0;
+            const italic = (cell.attrs & ATTR_ITALIC) !== 0;
+            this.ctx.font = bold && italic ? this.fontBoldItalic
+                : bold ? this.fontBold
+                    : italic ? this.fontItalic
+                        : this.fontNormal;
             this.ctx.fillStyle = `rgb(${fr},${fg},${fb})`;
-            this.ctx.save();
-            this.ctx.beginPath();
-            this.ctx.rect(x, y, cellSpan, cellH);
-            this.ctx.clip();
-            this.ctx.fillText(String.fromCodePoint(cell.cp), x, y + 1);
-            this.ctx.restore();
+
+            if (wide) {
+                // Clip wide glyphs to their span so they can't bleed into unrelated cells.
+                this.ctx.save();
+                this.ctx.beginPath();
+                this.ctx.rect(x, y, cellSpan, this.cellH);
+                this.ctx.clip();
+                this.ctx.fillText(String.fromCodePoint(cell.cp), x, y + 1);
+                this.ctx.restore();
+                this.ctx.textBaseline = 'top'; // restore after save/restore
+            } else {
+                this.ctx.fillText(String.fromCodePoint(cell.cp), x, y + 1);
+            }
         }
 
         if (cell.attrs & ATTR_UNDERLINE) {
             this.ctx.fillStyle = `rgb(${fr},${fg},${fb})`;
-            this.ctx.fillRect(x, y + cellH - 2, cellSpan, 1);
+            this.ctx.fillRect(x, y + this.cellH - 2, cellSpan, 1);
         }
-    }
-
-    private paintCursor() {
-        if (!this.cursorVisible) return;
-        if (this.cursorRow >= this.rows || this.cursorCol >= this.cols) return;
-        this.paintCell(this.cursorRow, this.cursorCol, this.grid[this.cursorRow][this.cursorCol], true);
     }
 }
 
 function encodeKey(e: KeyboardEvent): string | null {
-    // Modifier-less printable chars are handled via 'keypress'/IME; we use a textInput field instead.
-    // For keys without printable chars, map to ANSI sequences.
     const k = e.key;
-    if (e.ctrlKey && !e.metaKey && !e.altKey && k.length === 1) {
-        const c = k.toLowerCase().charCodeAt(0);
-        if (c >= 0x40 && c <= 0x7f) return String.fromCharCode(c - 0x60 & 0x1f);
-        if (k === ' ') return '\x00';
+
+    if (e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (k.length === 1) {
+            const c = k.toLowerCase().charCodeAt(0);
+            if (c >= 0x40 && c <= 0x7f) return String.fromCharCode(c - 0x60 & 0x1f);
+            if (k === ' ') return '\x00';
+        }
     }
+
+    // Alt+key → ESC prefix (readline Meta sequences: M-f, M-b, etc.)
+    if (e.altKey && !e.ctrlKey && !e.metaKey && k.length === 1) {
+        return '\x1b' + k;
+    }
+
     switch (k) {
         case 'Enter': return e.shiftKey ? '\n' : '\r';
         case 'Backspace': return '\x7f';
-        case 'Tab': return '\t';
+        case 'Tab': return e.shiftKey ? '\x1b[Z' : '\t';
         case 'Escape': return '\x1b';
         case 'ArrowUp': return '\x1b[A';
         case 'ArrowDown': return '\x1b[B';
@@ -377,7 +554,7 @@ export class Xterm {
     private titleFixed?: string;
     private currentTitle?: string;
     private resizeTimer = 0;
-    private mouseMode = 0; // libvterm mouse mode: 0=off, 1=click, 2=drag, 3=move
+    private mouseMode = 0;
     private mouseDownBtn = -1;
 
     private static generateSessionId(): string {
@@ -414,7 +591,6 @@ export class Xterm {
 
     @bind
     public sendFile(_files: FileList) {
-        // file transfers not supported in cell-diff mode
         console.warn('[tabsh] file transfer disabled in cell-diff mode');
     }
 
@@ -445,7 +621,6 @@ export class Xterm {
         pre.setAttribute('aria-label', 'terminal contents');
         pre.setAttribute('aria-live', 'polite');
         pre.setAttribute('role', 'log');
-        // Off-screen but readable by AT and AI scrapers.
         pre.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden;white-space:pre;font-family:monospace';
         document.body.appendChild(pre);
         this.a11yEl = pre;
@@ -474,14 +649,11 @@ export class Xterm {
         if (!this.a11yEl || !this.renderer) return;
         const r = this.renderer;
         const lines: string[] = [];
-        for (const row of r.scrollback) {
-            lines.push(rowToText(row));
-        }
+        for (const row of r.scrollback) lines.push(rowToText(row));
         for (let i = 0; i < r.rows; i++) {
             const row = (r as unknown as { grid: Cell[][] }).grid[i];
             if (row) lines.push(rowToText(row));
         }
-        // Trim trailing blank lines for readability
         while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
         this.a11yEl.textContent = lines.join('\n');
     }
@@ -496,12 +668,15 @@ export class Xterm {
 
     private onResize() {
         if (!this.renderer || !this.parent) return;
-        // debounce
         clearTimeout(this.resizeTimer);
         this.resizeTimer = window.setTimeout(() => {
-            const { cols, rows } = this.renderer!.fit(this.parent!.clientWidth, this.parent!.clientHeight);
+            const sw = this.renderer!.scrollWrap;
+            const { cols, rows } = this.renderer!.fit(
+                sw.clientWidth || this.parent!.clientWidth,
+                sw.clientHeight || this.parent!.clientHeight,
+            );
             if (this.socket?.readyState === WebSocket.OPEN) {
-                const msg = Cmd.RESIZE_TERMINAL + JSON.stringify({ columns: cols, rows });
+                const msg = C2S.RESIZE_TERMINAL + JSON.stringify({ columns: cols, rows });
                 this.socket.send(this.textEncoder.encode(msg));
             }
         }, 50);
@@ -509,17 +684,40 @@ export class Xterm {
 
     private attachInput() {
         const canvas = this.renderer!.canvas;
+        const scrollWrap = this.renderer!.scrollWrap;
+
+        // TUI mouse cell coords (1-based, clamped to grid).
+        const cellCoords = (e: MouseEvent) => {
+            const r = canvas.getBoundingClientRect();
+            const col = Math.min(this.renderer!.cols, Math.max(1, Math.floor((e.clientX - r.left) / this.renderer!.cellW) + 1));
+            const row = Math.min(this.renderer!.rows, Math.max(1, Math.floor((e.clientY - r.top) / this.renderer!.cellH) + 1));
+            return { col, row };
+        };
+
+        // Selection cell coords (0-based absLine, clamped to canvas).
+        const selCoords = (e: MouseEvent) => {
+            const r = canvas.getBoundingClientRect();
+            const col = Math.max(0, Math.min(this.renderer!.cols - 1, Math.floor((e.clientX - r.left) / this.renderer!.cellW)));
+            const viewRow = Math.max(0, Math.min(this.renderer!.rows - 1, Math.floor((e.clientY - r.top) / this.renderer!.cellH)));
+            return { col, absLine: this.renderer!.viewFirstLine + viewRow };
+        };
+
+        const mods = (e: MouseEvent) => (e.shiftKey ? 4 : 0) | (e.altKey ? 8 : 0) | (e.ctrlKey ? 16 : 0);
+
         canvas.addEventListener('keydown', (e: KeyboardEvent) => {
+            // Intercept Ctrl/Cmd+C as copy when a selection exists.
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !e.altKey && this.renderer!.sel) {
+                e.preventDefault();
+                navigator.clipboard.writeText(this.renderer!.buildSelectionText()).catch(() => {});
+                return;
+            }
             const s = encodeKey(e);
             if (s !== null) {
                 e.preventDefault();
-                if (this.renderer && this.renderer.scrollOffset > 0) {
-                    this.renderer.scrollOffset = 0;
-                    this.renderer.repaintAll();
-                }
                 this.sendInput(s);
             }
         });
+
         canvas.addEventListener('paste', (e: ClipboardEvent) => {
             const text = e.clipboardData?.getData('text');
             if (text) {
@@ -529,17 +727,42 @@ export class Xterm {
         });
         canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-        const cellCoords = (e: MouseEvent) => {
-            const r = canvas.getBoundingClientRect();
-            const col = Math.min(this.renderer!.cols, Math.max(1, Math.floor((e.clientX - r.left) / this.renderer!.cellW) + 1));
-            const row = Math.min(this.renderer!.rows, Math.max(1, Math.floor((e.clientY - r.top) / this.renderer!.cellH) + 1));
-            return { col, row };
-        };
-        const mods = (e: MouseEvent) => (e.shiftKey ? 4 : 0) | (e.altKey ? 8 : 0) | (e.ctrlKey ? 16 : 0);
+        // Selection drag — on scrollWrap so it receives events whether the pointer
+        // is over the canvas or the spacer padding above/below it.
+        let selecting = false;
+        scrollWrap.addEventListener('mousedown', (e: MouseEvent) => {
+            if (e.button !== 0 || this.mouseMode !== 0) return;
+            const { col, absLine } = selCoords(e);
+            this.renderer!.sel = { aLine: absLine, aCol: col, fLine: absLine, fCol: col };
+            selecting = true;
+            e.preventDefault();
+        });
+        scrollWrap.addEventListener('mousemove', (e: MouseEvent) => {
+            if (!selecting) return;
+            const { col, absLine } = selCoords(e);
+            this.renderer!.sel!.fLine = absLine;
+            this.renderer!.sel!.fCol = col;
+            this.renderer!.repaintViewport();
+        });
+        scrollWrap.addEventListener('mouseup', (e: MouseEvent) => {
+            if (!selecting) return;
+            selecting = false;
+            const { col, absLine } = selCoords(e);
+            const sel = this.renderer!.sel!;
+            sel.fLine = absLine;
+            sel.fCol = col;
+            // Zero-width click: clear selection.
+            if (sel.aLine === sel.fLine && sel.aCol === sel.fCol) {
+                this.renderer!.sel = undefined;
+            }
+            this.renderer!.repaintViewport();
+        });
+        scrollWrap.addEventListener('mouseleave', () => { selecting = false; });
 
+        // TUI mouse events — on canvas; only active when mouseMode !== 0.
         canvas.addEventListener('mousedown', (e: MouseEvent) => {
             canvas.focus();
-            if (this.mouseMode === 0) return;
+            if (this.mouseMode === 0) return; // handled by scrollWrap above
             e.preventDefault();
             const btn = e.button === 0 ? 0 : e.button === 1 ? 1 : e.button === 2 ? 2 : 0;
             this.mouseDownBtn = btn;
@@ -561,17 +784,22 @@ export class Xterm {
             const { col, row } = cellCoords(e);
             this.sendInput(`\x1b[<${btn | mods(e)};${col};${row}M`);
         });
+
+        // Wheel: forward as mouse codes when TUI owns the mouse; swallow on altscreen
+        // without mouse mode (Case B); otherwise let the browser scroll natively (Case C).
         canvas.addEventListener('wheel', (e: WheelEvent) => {
-            e.preventDefault();
             if (this.mouseMode !== 0) {
-                const dir = e.deltaY > 0 ? 65 : 64; // 64=up (button 4), 65=down (button 5)
+                e.preventDefault();
+                const dir = e.deltaY > 0 ? 65 : 64;
                 const { col, row } = cellCoords(e);
                 this.sendInput(`\x1b[<${dir | mods(e)};${col};${row}M`);
                 return;
             }
-            // Mouse-mode off: scroll local history. deltaY > 0 = wheel down = scroll toward present.
-            const lines = e.deltaY > 0 ? -3 : 3;
-            this.renderer?.scrollBy(lines);
+            if (this.renderer!.isAltScreen) {
+                e.preventDefault(); // TUI fullscreen, no mouse mode — swallow
+                return;
+            }
+            // Normal scroll: no preventDefault; browser scrolls the wrap natively.
         }, { passive: false });
 
         canvas.focus();
@@ -581,7 +809,7 @@ export class Xterm {
         if (this.socket?.readyState !== WebSocket.OPEN) return;
         const bytes = this.textEncoder.encode(s);
         const payload = new Uint8Array(bytes.length + 1);
-        payload[0] = Cmd.INPUT.charCodeAt(0);
+        payload[0] = C2S.INPUT.charCodeAt(0);
         payload.set(bytes, 1);
         this.socket.send(payload);
     }
@@ -627,15 +855,15 @@ export class Xterm {
         const cmd = String.fromCharCode(new Uint8Array(buf, 0, 1)[0]);
         const data = buf.slice(1);
         switch (cmd) {
-            case Cmd.CELL_DIFF:
+            case S2C.CELL_DIFF:
                 this.renderer?.applyFrame(data);
                 this.scheduleA11yUpdate();
                 break;
-            case Cmd.SB_PUSH:
+            case S2C.SB_PUSH:
                 this.renderer?.applySbPush(data);
                 this.scheduleA11yUpdate();
                 break;
-            case Cmd.SET_WINDOW_TITLE: {
+            case S2C.SET_WINDOW_TITLE: {
                 const title = this.textDecoder.decode(data);
                 if (!this.titleFixed) {
                     this.currentTitle = title;
@@ -643,22 +871,24 @@ export class Xterm {
                 }
                 break;
             }
-            case Cmd.SET_PREFERENCES:
+            case S2C.SET_PREFERENCES:
                 try {
                     const prefs = JSON.parse(this.textDecoder.decode(data));
                     this.applyPrefs(prefs);
                 } catch { /* ignore */ }
                 break;
-            case Cmd.SET_REATTACHED:
-                // server will follow with a full repaint frame
+            case S2C.SET_REATTACHED:
+                // server follows with MOUSE_MODE + ALT_SCREEN + full repaint frame
                 break;
-            case Cmd.MOUSE_MODE:
+            case S2C.MOUSE_MODE:
                 this.mouseMode = new Uint8Array(data)[0] ?? 0;
                 console.log(`[tabsh] mouse mode = ${this.mouseMode}`);
                 break;
-            case Cmd.SET_APP_COMMAND:
-            case Cmd.SET_APP_FAVICON:
-                // best-effort; not critical for terminal display
+            case S2C.ALT_SCREEN:
+                this.renderer?.setAltScreen((new Uint8Array(data)[0] ?? 0) === 1);
+                break;
+            case S2C.SET_APP_COMMAND:
+            case S2C.SET_APP_FAVICON:
                 break;
             default:
                 console.warn(`[tabsh] unknown command: ${cmd}`);
