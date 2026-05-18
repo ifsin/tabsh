@@ -126,8 +126,9 @@ class CanvasRenderer {
     private measureCell() {
         this.ctx.font = `${this.fontSize}px ${this.fontFamily}`;
         const m = this.ctx.measureText('M');
-        this.cellW = Math.max(1, Math.round(m.width));
-        this.cellH = Math.max(1, Math.round(this.fontSize * 1.3));
+        // Snap to physical pixel so col*cellW always lands on an exact physical boundary.
+        this.cellW = Math.round(Math.max(1, Math.round(m.width)) * this.dpr) / this.dpr;
+        this.cellH = Math.round(Math.max(1, Math.round(this.fontSize * 1.3)) * this.dpr) / this.dpr;
     }
 
     focus() {
@@ -208,9 +209,7 @@ class CanvasRenderer {
     }
 
     private paintCellAt(viewRow: number, col: number, cell: Cell, isCursor: boolean) {
-        const x = col * this.cellW;
-        const y = viewRow * this.cellH;
-        this.paintCellAtXY(x, y, cell, isCursor);
+        this.paintCellAtXY(col * this.cellW, viewRow * this.cellH, cell, isCursor);
     }
 
     applyFrame(buf: ArrayBuffer) {
@@ -238,9 +237,17 @@ class CanvasRenderer {
             const attrs = v.getUint8(o++); const width = v.getUint8(o++);
 
             if (row >= this.rows || col >= this.cols) continue;
+            const prev = this.grid[row][col];
             const cell: Cell = { cp, fr, fg, fb, br, bg, bb, attrs, width };
             this.grid[row][col] = cell;
-            if (!scrolledAway) this.paintCell(row, col, cell, false);
+            if (!scrolledAway) {
+                this.paintCell(row, col, cell, false);
+                // If the old cell was wide, clear the right-half continuation cell so no ghost remains.
+                if (prev && prev.width >= 2 && col + 1 < this.cols) {
+                    const cont = this.grid[row][col + 1];
+                    this.paintCell(row, col + 1, cont, false);
+                }
+            }
         }
 
         this.cursorRow = curRow;
@@ -279,21 +286,27 @@ class CanvasRenderer {
             fr = this.bgDefault[0]; fg = this.bgDefault[1]; fb = this.bgDefault[2];
         }
 
-        const w = this.cellW * (cell.width || 1);
+        const cellSpan = this.cellW * Math.max(1, cell.width || 1);
+        const cellH = this.cellH;
         this.ctx.fillStyle = `rgb(${br},${bg},${bb})`;
-        this.ctx.fillRect(x, y, w, this.cellH);
+        this.ctx.fillRect(x, y, cellSpan, cellH);
 
         if (cell.cp >= 0x20 && cell.cp !== 0xa0) {
             const bold = (cell.attrs & ATTR_BOLD) ? 'bold ' : '';
             const italic = (cell.attrs & ATTR_ITALIC) ? 'italic ' : '';
             this.ctx.font = `${italic}${bold}${this.fontSize}px ${this.fontFamily}`;
             this.ctx.fillStyle = `rgb(${fr},${fg},${fb})`;
+            this.ctx.save();
+            this.ctx.beginPath();
+            this.ctx.rect(x, y, cellSpan, cellH);
+            this.ctx.clip();
             this.ctx.fillText(String.fromCodePoint(cell.cp), x, y + 1);
+            this.ctx.restore();
         }
 
         if (cell.attrs & ATTR_UNDERLINE) {
             this.ctx.fillStyle = `rgb(${fr},${fg},${fb})`;
-            this.ctx.fillRect(x, y + this.cellH - 2, w, 1);
+            this.ctx.fillRect(x, y + cellH - 2, cellSpan, 1);
         }
     }
 

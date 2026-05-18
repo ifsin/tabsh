@@ -1,6 +1,6 @@
 import { h, Component } from 'preact';
 import { Terminal } from './terminal';
-import type { ClientOptions, FlowControl } from './terminal/xterm';
+import type { ClientOptions, FlowControl } from './terminal/canvas';
 
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const path = window.location.pathname.replace(/\/dir\/.*/, '').replace(/[/]+$/, '');

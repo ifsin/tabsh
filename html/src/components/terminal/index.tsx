@@ -1,5 +1,5 @@
 import { Component, h } from 'preact';
-import { Xterm, XtermOptions } from './xterm';
+import { Xterm, XtermOptions } from './canvas';
 
 interface Props extends XtermOptions {
     id: string;

@@ -629,6 +629,13 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             unsigned char reattach_msg[LWS_PRE + 1];
             reattach_msg[LWS_PRE] = SET_REATTACHED;
             lws_write(wsi, &reattach_msg[LWS_PRE], 1, LWS_WRITE_BINARY);
+            /* Re-send current mouse mode so the reconnected client doesn't revert to 0. */
+            if (pss->session && pss->session->terminal) {
+              unsigned char mm[LWS_PRE + 2];
+              mm[LWS_PRE]     = MOUSE_MODE;
+              mm[LWS_PRE + 1] = pss->session->terminal->mouse_mode;
+              lws_write(wsi, &mm[LWS_PRE], 2, LWS_WRITE_BINARY);
+            }
             uv_timer_t *t = xmalloc(sizeof(uv_timer_t));
             uv_timer_init(server->loop, t);
             t->data = pss->process;
