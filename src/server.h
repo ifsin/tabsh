@@ -10,26 +10,26 @@
 
 #define PTY_RING_SIZE (256 * 1024)
 
-// client message
-#define INPUT '0'
-#define RESIZE_TERMINAL '1'
-#define PAUSE '2'
-#define RESUME '3'
-#define QUIT '4'
+// client → server
+#define INPUT    '0'
+#define RESIZE   '1'
+#define PAUSE    '2'
+#define RESUME   '3'
+#define QUIT     '4'
+#define CLEAR    '5'
 #define JSON_DATA '{'
 
-// server message
-#define OUTPUT '0'
-#define SET_WINDOW_TITLE '1'
-#define SET_PREFERENCES '2'
-#define SET_APP_COMMAND '3'
-#define SET_REATTACHED '4'
-#define SET_APP_FAVICON '5'
-#define CELL_DIFF '6'
-#define SB_PUSH '7'
-#define MOUSE_MODE '8'
-#define ALT_SCREEN '9'
-#define CURSOR_BLINK ':'
+// server → client
+#define CELL_DIFF    '0'
+#define SB_PUSH      '1'
+#define WINDOW_TITLE '2'
+#define PREFERENCES  '3'
+#define REATTACHED   '4'
+#define APP_COMMAND  '5'
+#define APP_FAVICON  '6'
+#define MOUSE_MODE   '7'
+#define ALT_SCREEN   '8'
+#define CURSOR_BLINK '9'
 
 // url paths
 struct endpoints {
@@ -89,7 +89,6 @@ struct pss_tty {
   size_t len;
 
   pty_process *process;
-  pty_buf_t *pty_buf;
   session_t *session;
 
   char *cwd;
@@ -110,11 +109,16 @@ struct pss_tty {
 
   pid_t last_fgpid;
 
-  bool cell_diff_enabled;
   bool pending_frame;
 
   bool pending_altscreen_send;
   uint8_t pending_altscreen_value;
+
+  bool pending_mouse_mode_send;
+  uint8_t pending_mouse_mode_value;
+
+  bool pending_cursor_blink_send;
+  bool pending_cursor_blink_value;
 };
 
 struct server {

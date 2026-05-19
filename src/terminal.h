@@ -9,7 +9,7 @@
 #define TERM_MAX_CELLS        16384
 #define CELL_DIFF_HEADER_SIZE 8       /* type(1)+flags(1)+cur_row(2)+cur_col(2)+count(2) */
 #define CELL_SIZE             16      /* row(2)+col(2)+cp(4)+fg(3)+bg(3)+attrs(1)+width(1) */
-#define SB_MAX_QUEUED         200     /* cap on lines waiting to be sent in one batch */
+#define SB_RING_SIZE          2000    /* persistent scrollback ring; replayed on reattach */
 
 typedef struct {
   uint16_t row, col;
@@ -47,11 +47,19 @@ typedef struct terminal_s {
   uint8_t altscreen_active;    /* 0=primary, 1=alt */
   bool    altscreen_changed;
 
-  /* scrollback queue: lines that have been pushed off the top */
-  sb_line_t *sb_head;
-  sb_line_t *sb_tail;
-  int        sb_pending;
-  unsigned char *sb_buf;
+  char   *pending_title;       /* heap string, NULL if unchanged */
+  bool    title_changed;
+
+  /* persistent scrollback ring — lines stay until evicted by newer ones */
+  sb_line_t *sb_ring[SB_RING_SIZE];
+  int        sb_ring_head;     /* index of oldest entry */
+  int        sb_ring_count;    /* number of valid entries */
+
+  /* per-client send cursor into the ring */
+  int        sb_send_pos;      /* ring index of next line to send */
+  int        sb_send_count;    /* how many lines remain to send */
+
+  unsigned char *sb_buf;       /* encoding scratch buffer */
   size_t         sb_buf_cap;
 
   void *pss;
@@ -66,6 +74,12 @@ void                 terminal_mark_all_dirty(terminal_t *term);
 bool                 terminal_take_mouse_mode_change(terminal_t *term, uint8_t *out_mode);
 bool                 terminal_take_altscreen_change(terminal_t *term, uint8_t *out);
 bool                 terminal_take_cursor_blink_change(terminal_t *term, bool *out);
-/* Encode + dequeue one pending scrollback line. Returns NULL if none queued.
+char                *terminal_take_title(terminal_t *term);
+/* Encode + dequeue one pending scrollback line for sending to current client.
+ * The line stays in the ring for replay on reattach.
  * Pointer is valid until next call; do not free.  */
 const unsigned char *terminal_take_sb_line(terminal_t *term, size_t *out_len);
+/* Reset send cursor so the full ring is replayed to a newly attached client. */
+void                 terminal_replay_sb(terminal_t *term);
+/* Clear and free all scrollback history, and blank the libvterm screen. */
+void                 terminal_clear(terminal_t *term);

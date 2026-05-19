@@ -4,26 +4,26 @@ import { bind } from 'decko';
 
 // Commands server → client
 const enum S2C {
-    OUTPUT_LEGACY = '0',
-    SET_WINDOW_TITLE = '1',
-    SET_PREFERENCES = '2',
-    SET_APP_COMMAND = '3',
-    SET_REATTACHED = '4',
-    SET_APP_FAVICON = '5',
-    CELL_DIFF = '6',
-    SB_PUSH = '7',
-    MOUSE_MODE = '8',
-    ALT_SCREEN = '9',
-    CURSOR_BLINK = ':',
+    CELL_DIFF    = '0',
+    SB_PUSH      = '1',
+    WINDOW_TITLE = '2',
+    PREFERENCES  = '3',
+    REATTACHED   = '4',
+    APP_COMMAND  = '5',
+    APP_FAVICON  = '6',
+    MOUSE_MODE   = '7',
+    ALT_SCREEN   = '8',
+    CURSOR_BLINK = '9',
 }
 
 // Commands client → server
 const enum C2S {
-    INPUT = '0',
-    RESIZE_TERMINAL = '1',
-    PAUSE = '2',
+    INPUT  = '0',
+    RESIZE = '1',
+    PAUSE  = '2',
     RESUME = '3',
-    QUIT = '4',
+    QUIT   = '4',
+    CLEAR  = '5',
 }
 
 const ATTR_BOLD = 0x01;
@@ -70,6 +70,10 @@ export interface XtermOptions {
         fontFamily?: string;
         theme?: { foreground?: string; background?: string; cursor?: string };
     };
+    cwd?: string;
+    app?: string;
+    onAppCommand?: (cmd: string) => void;
+    onAppFavicon?: (url: string) => void;
 }
 
 function blankCell(fg: [number, number, number], bg: [number, number, number]): Cell {
@@ -92,15 +96,15 @@ const SB_MAX_LINES = 10000;
 class CanvasRenderer {
     canvas: HTMLCanvasElement;
     scrollWrap: HTMLDivElement;
-    private scrollInner: HTMLDivElement;
+    scrollInner: HTMLDivElement;
     private ctx: CanvasRenderingContext2D;
-    private grid: Cell[][] = [];
+    grid: Cell[][] = [];
     rows = 24;
     cols = 80;
     cellW = 8;
     cellH = 16;
-    private fontSize: number;
-    private fontFamily: string;
+    fontSize: number;
+    fontFamily: string;
     private dpr: number;
     private cursorRow = 0;
     private cursorCol = 0;
@@ -120,10 +124,12 @@ class CanvasRenderer {
     scrollback: Cell[][] = [];
     // droppedCount = total lines ever evicted from sb head; keeps absLine stable.
     private droppedCount = 0;
+    get dropped() { return this.droppedCount; }
     // viewFirstLine = absolute line index at the top of the canvas viewport.
     viewFirstLine = 0;
     private altScreenActive = false;
     sel?: { aLine: number; aCol: number; fLine: number; fCol: number };
+    overlayEl?: HTMLDivElement;
 
     constructor(parent: HTMLElement, fontSize: number, fontFamily: string, theme: { foreground?: string; background?: string; cursor?: string }) {
         this.fontSize = fontSize;
@@ -218,6 +224,17 @@ class CanvasRenderer {
         this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         this.ctx.textBaseline = 'alphabetic';
 
+        if (this.overlayEl) {
+            this.overlayEl.style.width = `${cols * this.cellW}px`;
+            Array.from(this.overlayEl.children).forEach((child, i) => {
+                const el = child as HTMLElement;
+                el.style.top        = `${i * this.cellH}px`;
+                el.style.height     = `${this.cellH}px`;
+                el.style.fontSize   = `${this.fontSize}px`;
+                el.style.lineHeight = `${this.cellH}px`;
+                el.style.fontFamily = this.fontFamily;
+            });
+        }
         this.updateInnerHeight();
         this.viewFirstLine = this.droppedCount + Math.floor(this.scrollWrap.scrollTop / this.cellH);
         this.repaintViewport();
@@ -225,11 +242,11 @@ class CanvasRenderer {
     }
 
     private updateInnerHeight() {
-        if (this.altScreenActive) {
-            this.scrollInner.style.height = `${this.rows * this.cellH}px`;
-        } else {
-            this.scrollInner.style.height = `${(this.scrollback.length + this.rows) * this.cellH}px`;
-        }
+        const h = this.altScreenActive
+            ? this.rows * this.cellH
+            : (this.scrollback.length + this.rows) * this.cellH;
+        this.scrollInner.style.height = `${h}px`;
+        if (this.overlayEl) this.overlayEl.style.height = `${h}px`;
     }
 
     // scrollTop = sb.length * cellH means grid[0] is at the top → we're at the live screen.
@@ -246,6 +263,14 @@ class CanvasRenderer {
 
     private snapToBottom() {
         this.setScrollTop(this.scrollback.length * this.cellH);
+    }
+
+    clearAll() {
+        this.scrollback.length = 0;
+        for (const row of this.grid) row.length = 0;
+        this.updateInnerHeight();
+        this.snapToBottom();
+        this.repaintViewport();
     }
 
     private onScroll() {
@@ -453,7 +478,7 @@ class CanvasRenderer {
         this.altScreenActive = on;
         if (on) {
             this.scrollWrap.style.overflowY = 'hidden';
-            this.scrollInner.style.height = `${this.rows * this.cellH}px`;
+            this.updateInnerHeight();
             this.scrollWrap.scrollTop = 0;
             this.viewFirstLine = this.droppedCount + this.scrollback.length;
             this.sel = undefined;
@@ -477,6 +502,10 @@ class CanvasRenderer {
     }
 
     get isAltScreen() { return this.altScreenActive; }
+
+    getScreenText(): string {
+        return this.grid.map(rowToText).join('\n').replace(/\n+$/, '');
+    }
 
     private paintCellAt(viewRow: number, col: number, cell: Cell, isCursor: boolean) {
         this.paintCellAtXY(col * this.cellW, viewRow * this.cellH, cell, isCursor);
@@ -646,37 +675,34 @@ export class Xterm {
         const fontFamily = this.options.termOptions.fontFamily ?? 'monospace';
         this.renderer = new CanvasRenderer(parent, fontSize, fontFamily, this.options.termOptions.theme ?? {});
         this.renderer.fit(parent.clientWidth || window.innerWidth, parent.clientHeight || window.innerHeight);
-        this.installA11yMirror();
 
         this.resizeObs = new ResizeObserver(() => this.onResize());
         this.resizeObs.observe(parent);
         window.addEventListener('resize', () => this.onResize());
         window.addEventListener('beforeunload', this.onBeforeUnload);
+        this.installA11yMirror();
         this.attachInput();
     }
 
-    private a11yEl?: HTMLPreElement;
+    private a11yEl?: HTMLDivElement;
     private a11yTimer = 0;
 
     private installA11yMirror() {
-        const pre = document.createElement('pre');
-        pre.id = 'tabsh-buffer';
-        pre.setAttribute('aria-label', 'terminal contents');
-        pre.setAttribute('aria-live', 'polite');
-        pre.setAttribute('role', 'log');
-        pre.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:1px;overflow:hidden;white-space:pre;font-family:monospace';
-        document.body.appendChild(pre);
-        this.a11yEl = pre;
-
-        const hint = document.createElement('div');
-        hint.id = 'tabsh-api';
-        hint.style.cssText = pre.style.cssText;
-        hint.textContent =
-            'Terminal content available via:\n' +
-            '- DOM: #tabsh-buffer (scrollback + current view)\n' +
-            '- HTTP: GET /content?lines=N or ?blocks=N';
-        document.body.appendChild(hint);
-
+        const r = this.renderer!;
+        const container = document.createElement('div');
+        container.id = 'tabsh-buffer';
+        container.setAttribute('aria-label', 'terminal contents');
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('role', 'log');
+        // Transparent overlay inside scrollInner so it scrolls with content.
+        // pointer-events:none passes all mouse events through to the canvas.
+        container.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;' +
+            'user-select:none;overflow:hidden;z-index:1;margin:0;padding:0';
+        container.style.width  = `${r.cols * r.cellW}px`;
+        container.style.height = `${(r.scrollback.length + r.rows) * r.cellH}px`;
+        r.scrollInner.appendChild(container);
+        this.a11yEl = container;
+        r.overlayEl = container;
         this.scheduleA11yUpdate();
     }
 
@@ -689,16 +715,32 @@ export class Xterm {
     }
 
     private refreshA11y() {
-        if (!this.a11yEl || !this.renderer) return;
+        const overlay = this.a11yEl;
+        if (!overlay || !this.renderer) return;
         const r = this.renderer;
         const lines: string[] = [];
         for (const row of r.scrollback) lines.push(rowToText(row));
-        for (let i = 0; i < r.rows; i++) {
-            const row = (r as unknown as { grid: Cell[][] }).grid[i];
-            if (row) lines.push(rowToText(row));
+        for (let i = 0; i < r.rows; i++) lines.push(rowToText(r.grid[i] ?? []));
+
+        const existing = overlay.children;
+        for (let i = 0; i < lines.length; i++) {
+            if (i < existing.length) {
+                const el = existing[i] as HTMLElement;
+                if (el.textContent !== lines[i]) el.textContent = lines[i];
+                el.style.top = `${i * r.cellH}px`;
+            } else {
+                const div = document.createElement('div');
+                div.style.cssText =
+                    `position:absolute;left:0;white-space:pre;color:transparent;` +
+                    `height:${r.cellH}px;top:${i * r.cellH}px;` +
+                    `font-size:${r.fontSize}px;line-height:${r.cellH}px;font-family:${r.fontFamily}`;
+                div.textContent = lines[i];
+                overlay.appendChild(div);
+            }
         }
-        while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
-        this.a11yEl.textContent = lines.join('\n');
+        while (overlay.children.length > lines.length) {
+            overlay.removeChild(overlay.lastChild!);
+        }
     }
 
     @bind
@@ -720,7 +762,7 @@ export class Xterm {
                 sw.clientHeight || this.parent!.clientHeight,
             );
             if (this.socket?.readyState === WebSocket.OPEN) {
-                const msg = C2S.RESIZE_TERMINAL + JSON.stringify({ columns: cols, rows });
+                const msg = C2S.RESIZE + JSON.stringify({ columns: cols, rows });
                 this.socket.send(this.textEncoder.encode(msg));
             }
         }, 50);
@@ -755,6 +797,26 @@ export class Xterm {
                 navigator.clipboard.writeText(this.renderer!.buildSelectionText()).catch(() => {});
                 return;
             }
+            // Cmd/Ctrl+K: clear scrollback and screen.
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && !e.altKey) {
+                e.preventDefault();
+                this.renderer!.clearAll();
+                if (this.socket?.readyState === WebSocket.OPEN)
+                    this.socket.send(this.textEncoder.encode(C2S.CLEAR));
+                return;
+            }
+            // Alt+Backspace: delete word backward (readline: \x17 = Ctrl+W).
+            if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'Backspace') {
+                e.preventDefault();
+                this.sendInput('\x17');
+                return;
+            }
+            // Cmd/Ctrl+Backspace or Cmd/Ctrl+Delete: delete to beginning of line (readline: \x15 = Ctrl+U).
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+                e.preventDefault();
+                this.sendInput('\x15');
+                return;
+            }
             const s = encodeKey(e);
             if (s !== null) {
                 e.preventDefault();
@@ -766,16 +828,52 @@ export class Xterm {
             const text = e.clipboardData?.getData('text');
             if (text) {
                 e.preventDefault();
-                this.sendInput(text);
+                this.sendInput(`\x1b[200~${text}\x1b[201~`);
             }
         });
-        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        scrollWrap.addEventListener('contextmenu', (e: MouseEvent) => {
+            const sel = this.renderer!.sel;
+            const overlay = this.a11yEl;
+            if (!sel || !overlay) {
+                e.preventDefault(); // suppress "Save image as…"
+                return;
+            }
+            const r = this.renderer!;
+            const dropped = r.dropped;
+            let startLine: number, startCol: number, endLine: number, endCol: number;
+            if (sel.aLine < sel.fLine || (sel.aLine === sel.fLine && sel.aCol <= sel.fCol)) {
+                startLine = sel.aLine; startCol = sel.aCol;
+                endLine   = sel.fLine; endCol   = sel.fCol;
+            } else {
+                startLine = sel.fLine; startCol = sel.fCol;
+                endLine   = sel.aLine; endCol   = sel.aCol;
+            }
+            const startIdx = startLine - dropped;
+            const endIdx   = endLine - dropped;
+            const children = overlay.children;
+            if (startIdx < 0 || endIdx >= children.length) { e.preventDefault(); return; }
+            try {
+                const startEl = children[startIdx] as HTMLElement;
+                const endEl   = children[endIdx] as HTMLElement;
+                if (!startEl.firstChild || !endEl.firstChild) { e.preventDefault(); return; }
+                const clamp = (node: Text, col: number) => Math.min(col, node.length);
+                const range = document.createRange();
+                range.setStart(startEl.firstChild, clamp(startEl.firstChild as Text, startCol));
+                range.setEnd(endEl.firstChild,     clamp(endEl.firstChild as Text, endCol + 1));
+                const winSel = window.getSelection()!;
+                winSel.removeAllRanges();
+                winSel.addRange(range);
+                // No preventDefault — browser shows native menu with Copy
+            } catch {
+                e.preventDefault();
+            }
+        });
 
         // Selection drag — on scrollWrap so it receives events whether the pointer
         // is over the canvas or the spacer padding above/below it.
         let selecting = false;
         scrollWrap.addEventListener('mousedown', (e: MouseEvent) => {
-            if (e.button !== 0 || this.mouseMode !== 0) return;
+            if (e.button !== 0 || (this.mouseMode !== 0 && !e.shiftKey)) return;
             const { col, absLine } = selCoords(e);
             this.renderer!.sel = { aLine: absLine, aCol: col, fLine: absLine, fCol: col };
             selecting = true;
@@ -807,6 +905,7 @@ export class Xterm {
         canvas.addEventListener('mousedown', (e: MouseEvent) => {
             canvas.focus();
             if (this.mouseMode === 0) return; // handled by scrollWrap above
+            if (e.shiftKey) return; // shift override: let event bubble to scrollWrap for selection
             e.preventDefault();
             const btn = e.button === 0 ? 0 : e.button === 1 ? 1 : e.button === 2 ? 2 : 0;
             this.mouseDownBtn = btn;
@@ -815,6 +914,7 @@ export class Xterm {
         });
         canvas.addEventListener('mouseup', (e: MouseEvent) => {
             if (this.mouseMode === 0) return;
+            if (selecting) return; // shift-forced selection drag in progress
             e.preventDefault();
             const btn = this.mouseDownBtn >= 0 ? this.mouseDownBtn : (e.button === 0 ? 0 : e.button === 1 ? 1 : 2);
             this.mouseDownBtn = -1;
@@ -823,6 +923,7 @@ export class Xterm {
         });
         canvas.addEventListener('mousemove', (e: MouseEvent) => {
             if (this.mouseMode < 2) return;
+            if (selecting) return; // shift-forced selection drag in progress
             if (this.mouseMode === 2 && this.mouseDownBtn < 0) return;
             const btn = (this.mouseDownBtn >= 0 ? this.mouseDownBtn : 3) + 32;
             const { col, row } = cellCoords(e);
@@ -877,7 +978,8 @@ export class Xterm {
             columns: cols,
             rows,
             sessionId: this.sessionId,
-            cellDiff: true,
+            ...(this.options.cwd ? { cwd: this.options.cwd } : {}),
+            ...(this.options.app ? { app: this.options.app } : {}),
         });
         this.socket?.send(this.textEncoder.encode(msg));
         this.opened = true;
@@ -907,7 +1009,7 @@ export class Xterm {
                 this.renderer?.applySbPush(data);
                 this.scheduleA11yUpdate();
                 break;
-            case S2C.SET_WINDOW_TITLE: {
+            case S2C.WINDOW_TITLE: {
                 const title = this.textDecoder.decode(data);
                 if (!this.titleFixed) {
                     this.currentTitle = title;
@@ -915,18 +1017,17 @@ export class Xterm {
                 }
                 break;
             }
-            case S2C.SET_PREFERENCES:
+            case S2C.PREFERENCES:
                 try {
                     const prefs = JSON.parse(this.textDecoder.decode(data));
                     this.applyPrefs(prefs);
                 } catch { /* ignore */ }
                 break;
-            case S2C.SET_REATTACHED:
-                // server follows with MOUSE_MODE + ALT_SCREEN + full repaint frame
+            case S2C.REATTACHED:
+                // server follows with scrollback replay + MOUSE_MODE + ALT_SCREEN + full repaint
                 break;
             case S2C.MOUSE_MODE:
                 this.mouseMode = new Uint8Array(data)[0] ?? 0;
-                console.log(`[tabsh] mouse mode = ${this.mouseMode}`);
                 break;
             case S2C.ALT_SCREEN:
                 this.renderer?.setAltScreen((new Uint8Array(data)[0] ?? 0) === 1);
@@ -936,8 +1037,11 @@ export class Xterm {
                 this.renderer?.setCursorBlink(enabled);
                 break;
             }
-            case S2C.SET_APP_COMMAND:
-            case S2C.SET_APP_FAVICON:
+            case S2C.APP_COMMAND:
+                this.options.onAppCommand?.(this.textDecoder.decode(data));
+                break;
+            case S2C.APP_FAVICON:
+                this.options.onAppFavicon?.(this.textDecoder.decode(data));
                 break;
             default:
                 console.warn(`[tabsh] unknown command: ${cmd}`);

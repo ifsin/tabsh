@@ -5,6 +5,7 @@
 
 #include <libwebsockets.h>
 
+#include "server.h"
 #include "utils.h"
 
 static int screen_damage(VTermRect rect, void *user) {
@@ -83,15 +84,18 @@ static int screen_moverect(VTermRect dest, VTermRect src, void *user) {
 
 static int screen_sb_pushline(int cols, const VTermScreenCell *cells, void *user) {
   terminal_t *term = (terminal_t *)user;
-  if (term->sb_pending >= SB_MAX_QUEUED) {
-    /* drop oldest */
-    sb_line_t *old = term->sb_head;
-    if (old) {
-      term->sb_head = old->next;
-      if (term->sb_tail == old) term->sb_tail = NULL;
-      free(old->cells);
-      free(old);
-      term->sb_pending--;
+
+  /* Evict oldest ring entry if full */
+  if (term->sb_ring_count == SB_RING_SIZE) {
+    free(term->sb_ring[term->sb_ring_head]->cells);
+    free(term->sb_ring[term->sb_ring_head]);
+    term->sb_ring[term->sb_ring_head] = NULL;
+    term->sb_ring_head = (term->sb_ring_head + 1) % SB_RING_SIZE;
+    term->sb_ring_count--;
+    /* If send cursor was pointing at the evicted slot, advance it */
+    if (term->sb_send_count > 0) {
+      term->sb_send_pos = (term->sb_send_pos + 1) % SB_RING_SIZE;
+      /* sb_send_count stays same — we lost one unsent line */
     }
   }
 
@@ -120,13 +124,10 @@ static int screen_sb_pushline(int cols, const VTermScreenCell *cells, void *user
     e->width = (uint8_t)(cell.width ? cell.width : 1);
   }
 
-  if (term->sb_tail) {
-    term->sb_tail->next = line;
-    term->sb_tail = line;
-  } else {
-    term->sb_head = term->sb_tail = line;
-  }
-  term->sb_pending++;
+  int tail = (term->sb_ring_head + term->sb_ring_count) % SB_RING_SIZE;
+  term->sb_ring[tail] = line;
+  term->sb_ring_count++;
+  term->sb_send_count++;
   return 1;
 }
 
@@ -160,6 +161,11 @@ static int screen_settermprop(VTermProp prop, VTermValue *val, void *user) {
       term->cursor_dirty = true;
     }
   }
+  if (prop == VTERM_PROP_TITLE) {
+    free(term->pending_title);
+    term->pending_title = strdup(val->string.str);
+    term->title_changed = true;
+  }
   return 1;
 }
 
@@ -172,12 +178,11 @@ static VTermScreenCallbacks screen_cbs = {
 };
 
 const unsigned char *terminal_take_sb_line(terminal_t *term, size_t *out_len) {
-  if (term->sb_head == NULL) return NULL;
+  if (term->sb_send_count == 0) return NULL;
 
-  sb_line_t *line = term->sb_head;
-  term->sb_head = line->next;
-  if (term->sb_tail == line) term->sb_tail = NULL;
-  term->sb_pending--;
+  sb_line_t *line = term->sb_ring[term->sb_send_pos];
+  term->sb_send_pos = (term->sb_send_pos + 1) % SB_RING_SIZE;
+  term->sb_send_count--;
 
   size_t needed = LWS_PRE + 3 + (size_t)line->cols * CELL_SIZE;
   if (needed > term->sb_buf_cap) {
@@ -186,13 +191,13 @@ const unsigned char *terminal_take_sb_line(terminal_t *term, size_t *out_len) {
   }
 
   unsigned char *p = term->sb_buf + LWS_PRE;
-  p[0] = '7';
+  p[0] = SB_PUSH;
   p[1] = (uint8_t)(line->cols & 0xff);
   p[2] = (uint8_t)((line->cols >> 8) & 0xff);
   unsigned char *q = p + 3;
   for (int i = 0; i < line->cols; i++) {
     cell_entry_t *e = &line->cells[i];
-    q[0]  = (uint8_t)(e->row & 0xff);  /* row=0 placeholder */
+    q[0]  = (uint8_t)(e->row & 0xff);
     q[1]  = 0;
     q[2]  = (uint8_t)(e->col & 0xff);
     q[3]  = (uint8_t)((e->col >> 8) & 0xff);
@@ -208,9 +213,20 @@ const unsigned char *terminal_take_sb_line(terminal_t *term, size_t *out_len) {
   }
 
   *out_len = (size_t)(q - p);
-  free(line->cells);
-  free(line);
   return p;
+}
+
+char *terminal_take_title(terminal_t *term) {
+  if (!term->title_changed) return NULL;
+  term->title_changed = false;
+  char *t = term->pending_title;
+  term->pending_title = NULL;
+  return t;
+}
+
+void terminal_replay_sb(terminal_t *term) {
+  term->sb_send_pos   = term->sb_ring_head;
+  term->sb_send_count = term->sb_ring_count;
 }
 
 bool terminal_take_mouse_mode_change(terminal_t *term, uint8_t *out_mode) {
@@ -263,11 +279,25 @@ terminal_t *terminal_create(uint16_t rows, uint16_t cols, void *pss) {
   term->frame_buf_cap = LWS_PRE + CELL_DIFF_HEADER_SIZE + TERM_MAX_CELLS * CELL_SIZE;
   term->frame_buf = xmalloc(term->frame_buf_cap);
 
-  /* sb_buf: '7' + cols(2) + cols * 16 bytes; grows on demand */
+  /* sb_buf: SB_PUSH(1) + cols(2) + cols * CELL_SIZE bytes; grows on demand */
   term->sb_buf_cap = LWS_PRE + 3 + (size_t)cols * CELL_SIZE;
   term->sb_buf = xmalloc(term->sb_buf_cap);
 
   return term;
+}
+
+void terminal_clear(terminal_t *term) {
+  for (int i = 0; i < term->sb_ring_count; i++) {
+    int idx = (term->sb_ring_head + i) % SB_RING_SIZE;
+    free(term->sb_ring[idx]->cells);
+    free(term->sb_ring[idx]);
+    term->sb_ring[idx] = NULL;
+  }
+  term->sb_ring_head = term->sb_ring_count = term->sb_send_pos = term->sb_send_count = 0;
+  /* Clear libvterm's active screen directly so resize won't replay old content. */
+  const char seq[] = "\x1b[H\x1b[2J";
+  vterm_input_write(term->vt, seq, sizeof(seq) - 1);
+  vterm_screen_flush_damage(term->screen);
 }
 
 void terminal_destroy(terminal_t *term) {
@@ -275,11 +305,11 @@ void terminal_destroy(terminal_t *term) {
   if (term->vt) vterm_free(term->vt);
   free(term->frame_buf);
   free(term->sb_buf);
-  for (sb_line_t *l = term->sb_head; l != NULL; ) {
-    sb_line_t *next = l->next;
-    free(l->cells);
-    free(l);
-    l = next;
+  free(term->pending_title);
+  for (int i = 0; i < term->sb_ring_count; i++) {
+    int idx = (term->sb_ring_head + i) % SB_RING_SIZE;
+    free(term->sb_ring[idx]->cells);
+    free(term->sb_ring[idx]);
   }
   free(term);
 }
@@ -307,8 +337,8 @@ const unsigned char *terminal_encode_frame(terminal_t *term, size_t *out_len) {
   VTermPos cursor = {0, 0};
   vterm_state_get_cursorpos(state, &cursor);
 
-  /* 8-byte header (first byte is the WS command prefix '6' = CELL_DIFF) */
-  p[0] = '6';
+  /* 8-byte header */
+  p[0] = CELL_DIFF;
   p[1] = term->cursor_visible ? 0x01 : 0x00;  /* flags: cursor_visible */
   p[2] = (uint8_t)(cursor.row & 0xff);
   p[3] = (uint8_t)((cursor.row >> 8) & 0xff);
