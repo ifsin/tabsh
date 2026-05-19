@@ -35,6 +35,8 @@ typedef struct terminal_s {
   int          dirty_count;
   bool         cursor_dirty;
   bool         cursor_visible;
+  bool         cursor_blink_enabled;
+  bool         cursor_blink_changed;
 
   unsigned char *frame_buf;
   size_t         frame_buf_cap;
@@ -63,6 +65,7 @@ const unsigned char *terminal_encode_frame(terminal_t *term, size_t *out_len);
 void                 terminal_mark_all_dirty(terminal_t *term);
 bool                 terminal_take_mouse_mode_change(terminal_t *term, uint8_t *out_mode);
 bool                 terminal_take_altscreen_change(terminal_t *term, uint8_t *out);
+bool                 terminal_take_cursor_blink_change(terminal_t *term, bool *out);
 /* Encode + dequeue one pending scrollback line. Returns NULL if none queued.
  * Pointer is valid until next call; do not free.  */
 const unsigned char *terminal_take_sb_line(terminal_t *term, size_t *out_len);

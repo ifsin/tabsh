@@ -29,6 +29,7 @@
 #define SB_PUSH '7'
 #define MOUSE_MODE '8'
 #define ALT_SCREEN '9'
+#define CURSOR_BLINK ':'
 
 // url paths
 struct endpoints {

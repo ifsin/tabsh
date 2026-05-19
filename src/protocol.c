@@ -27,7 +27,7 @@ static char initial_cmds[] = {SET_PREFERENCES};
 #include "favicon.h"
 
 #ifndef _WIN32
-static void append_arg_text(char **out, size_t *out_len, const char *text, size_t text_len) {
+static void append_arg_text(char** out, size_t* out_len, const char* text, size_t text_len) {
   if (*out_len <= 1) return;
 
   size_t len = text_len < *out_len - 1 ? text_len : *out_len - 1;
@@ -37,10 +37,10 @@ static void append_arg_text(char **out, size_t *out_len, const char *text, size_
   **out = '\0';
 }
 
-static bool shell_arg_is_safe(const char *arg) {
+static bool shell_arg_is_safe(const char* arg) {
   if (*arg == '\0') return false;
 
-  for (const unsigned char *p = (const unsigned char *)arg; *p != '\0'; p++) {
+  for (const unsigned char* p = (const unsigned char*)arg; *p != '\0'; p++) {
     if (isalnum(*p) || strchr("_+-./:=,@%", *p) != NULL) continue;
     return false;
   }
@@ -48,15 +48,14 @@ static bool shell_arg_is_safe(const char *arg) {
   return true;
 }
 
-static const char *detect_shell(const char *command) {
-  static const char *shell_names[] = {"zsh",     "bash",      "fish",    "sh",
-                                       "dash",    "ksh",       "tcsh",    "pwsh",
-                                       "powershell", "cmd",    NULL};
-  const char *argv0 = strrchr(command, '/');
+static const char* detect_shell(const char* command) {
+  static const char* shell_names[] = {"zsh",  "bash", "fish",       "sh",  "dash", "ksh",
+                                      "tcsh", "pwsh", "powershell", "cmd", NULL};
+  const char* argv0 = strrchr(command, '/');
   argv0 = argv0 != NULL ? argv0 + 1 : command;
 
   char name[64] = {0};
-  const char *sp = strchr(argv0, ' ');
+  const char* sp = strchr(argv0, ' ');
   size_t len = sp ? (size_t)(sp - argv0) : strlen(argv0);
   if (len >= sizeof(name)) return NULL;
   strncpy(name, argv0, len);
@@ -67,18 +66,16 @@ static const char *detect_shell(const char *command) {
   return NULL;
 }
 
-static bool command_is_shell(const char *command) {
-  return detect_shell(command) != NULL;
-}
+static bool command_is_shell(const char* command) { return detect_shell(command) != NULL; }
 
-static void append_shell_arg(char **out, size_t *out_len, const char *arg) {
+static void append_shell_arg(char** out, size_t* out_len, const char* arg) {
   if (shell_arg_is_safe(arg)) {
     append_arg_text(out, out_len, arg, strlen(arg));
     return;
   }
 
   append_arg_text(out, out_len, "'", 1);
-  for (const char *p = arg; *p != '\0'; p++) {
+  for (const char* p = arg; *p != '\0'; p++) {
     if (*p == '\'') {
       append_arg_text(out, out_len, "'\\''", 4);
     } else {
@@ -88,26 +85,26 @@ static void append_shell_arg(char **out, size_t *out_len, const char *arg) {
   append_arg_text(out, out_len, "'", 1);
 }
 
-static void append_process_arg(char **out, size_t *out_len, const char *arg, bool shell_quote) {
+static void append_process_arg(char** out, size_t* out_len, const char* arg, bool shell_quote) {
   if (shell_quote)
     append_shell_arg(out, out_len, arg);
   else
     append_arg_text(out, out_len, arg, strlen(arg));
 }
 
-static void get_process_argv(pid_t pid, char *out, size_t out_len, bool shell_quote) {
+static void get_process_argv(pid_t pid, char* out, size_t out_len, bool shell_quote) {
   out[0] = '\0';
 #ifdef __APPLE__
   int mib[3] = {CTL_KERN, KERN_PROCARGS2, pid};
   char buf[8192];
   size_t buf_size = sizeof(buf);
   if (sysctl(mib, 3, buf, &buf_size, NULL, 0) != 0) return;
-  int argc = *(int *)buf;
-  char *p = buf + sizeof(int);
-  char *end = buf + buf_size;
+  int argc = *(int*)buf;
+  char* p = buf + sizeof(int);
+  char* end = buf + buf_size;
   p += strnlen(p, (size_t)(end - p)) + 1;
   while (p < end && *p == '\0') p++;
-  char *dst = out;
+  char* dst = out;
   size_t remaining = out_len;
   for (int i = 0; i < argc && p < end && remaining > 1; i++) {
     if (i > 0) append_arg_text(&dst, &remaining, " ", 1);
@@ -124,7 +121,7 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len, bool shell_qu
   close(fd);
   if (n <= 0) return;
 
-  char *dst = out;
+  char* dst = out;
   size_t remaining = out_len;
   for (ssize_t i = 0; i < n && remaining > 1;) {
     size_t arg_len = strnlen(buf + i, (size_t)(n - i));
@@ -136,26 +133,26 @@ static void get_process_argv(pid_t pid, char *out, size_t out_len, bool shell_qu
 }
 #endif
 
-static void reattach_sigwinch_cb(uv_timer_t *timer) {
-  pty_process *process = (pty_process *)timer->data;
+static void reattach_sigwinch_cb(uv_timer_t* timer) {
+  pty_process* process = (pty_process*)timer->data;
 #ifndef _WIN32
   if (process != NULL && process->pid > 0) {
     pty_resize(process);
     uv_kill(-process->pid, SIGWINCH);
   }
 #endif
-  uv_close((uv_handle_t *)timer, (uv_close_cb)free);
+  uv_close((uv_handle_t*)timer, (uv_close_cb)free);
 }
 
-static int send_initial_message(struct lws *wsi, int index) {
+static int send_initial_message(struct lws* wsi, int index) {
   unsigned char message[LWS_PRE + 1 + 4096];
-  unsigned char *p = &message[LWS_PRE];
+  unsigned char* p = &message[LWS_PRE];
   int n = 0;
 
   char cmd = initial_cmds[index];
   switch (cmd) {
     case SET_PREFERENCES:
-      n = snprintf((char *)p, 1 + 4096, "%c%s", cmd, server->prefs_json);
+      n = snprintf((char*)p, 1 + 4096, "%c%s", cmd, server->prefs_json);
       break;
     default:
       break;
@@ -164,10 +161,10 @@ static int send_initial_message(struct lws *wsi, int index) {
   return lws_write(wsi, p, (size_t)n, LWS_WRITE_BINARY);
 }
 
-static json_object *parse_window_size(const char *buf, size_t len, uint16_t *cols, uint16_t *rows) {
-  json_tokener *tok = json_tokener_new();
-  json_object *obj = json_tokener_parse_ex(tok, buf, len);
-  struct json_object *o = NULL;
+static json_object* parse_window_size(const char* buf, size_t len, uint16_t* cols, uint16_t* rows) {
+  json_tokener* tok = json_tokener_new();
+  json_object* obj = json_tokener_parse_ex(tok, buf, len);
+  struct json_object* o = NULL;
 
   if (json_object_object_get_ex(obj, "columns", &o)) *cols = (uint16_t)json_object_get_int(o);
   if (json_object_object_get_ex(obj, "rows", &o)) *rows = (uint16_t)json_object_get_int(o);
@@ -176,7 +173,7 @@ static json_object *parse_window_size(const char *buf, size_t len, uint16_t *col
   return obj;
 }
 
-static bool check_host_origin(struct lws *wsi) {
+static bool check_host_origin(struct lws* wsi) {
   char buf[256];
   memset(buf, 0, sizeof(buf));
   int len = lws_hdr_copy(wsi, buf, (int)sizeof(buf), WSI_TOKEN_ORIGIN);
@@ -199,7 +196,7 @@ static bool check_host_origin(struct lws *wsi) {
 }
 
 #ifndef _WIN32
-static void check_foreground_process(struct pss_tty *pss) {
+static void check_foreground_process(struct pss_tty* pss) {
   pid_t fgpid = pss->process ? pty_get_fg_pid(pss->process) : -1;
   if (fgpid <= 0) return;
   if (fgpid == pss->last_fgpid) return;
@@ -247,8 +244,7 @@ static void check_foreground_process(struct pss_tty *pss) {
     if (access(none_path, F_OK) == 0) {
       // cached none
     } else if (access(cache_path, F_OK) == 0) {
-      snprintf(pss->pending_favicon, sizeof(pss->pending_favicon),
-               "%s%s.png", endpoints.favicon, formula);
+      snprintf(pss->pending_favicon, sizeof(pss->pending_favicon), "%s%s.png", endpoints.favicon, formula);
       pss->pending_favicon_send = true;
       lws_callback_on_writable(pss->wsi);
     } else {
@@ -258,7 +254,7 @@ static void check_foreground_process(struct pss_tty *pss) {
 }
 #endif
 
-static void pty_ring_write(const char *data, size_t len) {
+static void pty_ring_write(const char* data, size_t len) {
   if (len == 0 || len >= PTY_RING_SIZE) return;
   size_t space = PTY_RING_SIZE - server->pty_ring_head;
   if (len <= space) {
@@ -271,8 +267,8 @@ static void pty_ring_write(const char *data, size_t len) {
   server->pty_ring_len = server->pty_ring_len + len > PTY_RING_SIZE ? PTY_RING_SIZE : server->pty_ring_len + len;
 }
 
-static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
-  session_t *session = (session_t *)process->ctx;
+static void process_read_cb(pty_process* process, pty_buf_t* buf, bool eof) {
+  session_t* session = (session_t*)process->ctx;
   if (session->detached) {
     pty_buf_free(buf);
     return;
@@ -297,9 +293,9 @@ static void process_read_cb(pty_process *process, pty_buf_t *buf, bool eof) {
   lws_callback_on_writable(session->pss->wsi);
 }
 
-static void process_exit_cb(pty_process *process) {
-  session_t *session = (session_t *)process->ctx;
-  struct pss_tty *pss = session->pss;
+static void process_exit_cb(pty_process* process) {
+  session_t* session = (session_t*)process->ctx;
+  struct pss_tty* pss = session->pss;
   if (session->detached) {
     lwsl_notice("process killed with signal %d, pid: %d\n", process->exit_signal, process->pid);
     if (pss != NULL) pss->session = NULL;
@@ -323,7 +319,7 @@ done:
   session_remove(session);
   if (session->timer != NULL) {
     uv_timer_stop(session->timer);
-    uv_close((uv_handle_t *)session->timer, (uv_close_cb)free);
+    uv_close((uv_handle_t*)session->timer, (uv_close_cb)free);
   }
   if (session->terminal != NULL) {
     terminal_destroy(session->terminal);
@@ -335,8 +331,8 @@ done:
   if (force_exit) exit(0);
 }
 
-static char **build_args(struct pss_tty *pss) {
-  const char *shell = detect_shell(server->argv[0]);
+static char** build_args(struct pss_tty* pss) {
+  const char* shell = detect_shell(server->argv[0]);
   int extra = 0;
 
   if (shell != NULL && pss->notify != NULL) {
@@ -350,28 +346,28 @@ static char **build_args(struct pss_tty *pss) {
   }
 
   int i, n = 0;
-  char **argv = xmalloc((server->argc + pss->argc + extra + 1) * sizeof(char *));
+  char** argv = xmalloc((server->argc + pss->argc + extra + 1) * sizeof(char*));
 
   for (i = 0; i < server->argc; i++) {
     argv[n++] = server->argv[i];
   }
 
   if (extra > 0) {
-    const char *init_dir = notify_init_dir(pss->notify);
+    const char* init_dir = notify_init_dir(pss->notify);
     if (strcmp(shell, "bash") == 0) {
       argv[n++] = "--rcfile";
-      char *path = xmalloc(strlen(init_dir) + 8);
+      char* path = xmalloc(strlen(init_dir) + 8);
       sprintf(path, "%s/bashrc", init_dir);
       argv[n++] = path;
     } else if (strcmp(shell, "pwsh") == 0 || strcmp(shell, "powershell") == 0) {
       argv[n++] = "-NoExit";
       argv[n++] = "-File";
-      char *path = xmalloc(strlen(init_dir) + 10);
+      char* path = xmalloc(strlen(init_dir) + 10);
       sprintf(path, "%s/init.ps1", init_dir);
       argv[n++] = path;
     } else if (strcmp(shell, "cmd") == 0) {
       argv[n++] = "/K";
-      char *path = xmalloc(strlen(init_dir) + 10);
+      char* path = xmalloc(strlen(init_dir) + 10);
       sprintf(path, "%s\\init.bat", init_dir);
       argv[n++] = path;
     }
@@ -386,23 +382,20 @@ static char **build_args(struct pss_tty *pss) {
   return argv;
 }
 
-static char **build_env(struct pss_tty *pss) {
-  int i = 0, n = 2;
-  char **envp = xmalloc(n * sizeof(char *));
+static char** build_env(struct pss_tty* pss) {
+  int i = 0, n = 3;
+  char** envp = xmalloc(n * sizeof(char*));
 
-  // TERM
   envp[i] = xmalloc(36);
   snprintf(envp[i], 36, "TERM=%s", server->terminal_type);
   i++;
 
-  // COLORTERM — signal 24-bit truecolor support to applications
   envp[i] = xmalloc(24);
   snprintf(envp[i], 24, "COLORTERM=truecolor");
   i++;
 
-  // TTYD_USER
   if (strlen(pss->user) > 0) {
-    envp = xrealloc(envp, (++n) * sizeof(char *));
+    envp = xrealloc(envp, (++n) * sizeof(char*));
     envp[i] = xmalloc(40);
     snprintf(envp[i], 40, "TTYD_USER=%s", pss->user);
     i++;
@@ -410,56 +403,56 @@ static char **build_env(struct pss_tty *pss) {
 
 #ifndef _WIN32
   if (pss->notify != NULL) {
-    const char *shim = notify_shim_dir(pss->notify);
-    const char *init = notify_init_dir(pss->notify);
+    const char* shim = notify_shim_dir(pss->notify);
+    const char* init = notify_init_dir(pss->notify);
 
-    envp = xrealloc(envp, (++n) * sizeof(char *));
+    envp = xrealloc(envp, (++n) * sizeof(char*));
     envp[i] = xmalloc(256);
     snprintf(envp[i], 256, "TABSH_SHIM_DIR=%s", shim);
     i++;
 
-    envp = xrealloc(envp, (++n) * sizeof(char *));
+    envp = xrealloc(envp, (++n) * sizeof(char*));
     envp[i] = xmalloc(256);
     snprintf(envp[i], 256, "TABSH_INIT_DIR=%s", init);
     i++;
 
-    const char *old_path = getenv("PATH");
+    const char* old_path = getenv("PATH");
     if (old_path != NULL) {
       size_t path_len = strlen(shim) + 1 + strlen(old_path) + 6;
-      envp = xrealloc(envp, (++n) * sizeof(char *));
+      envp = xrealloc(envp, (++n) * sizeof(char*));
       envp[i] = xmalloc(path_len);
       snprintf(envp[i], path_len, "PATH=%s:%s", shim, old_path);
       i++;
     }
 
-    const char *shell = detect_shell(server->argv[0]);
+    const char* shell = detect_shell(server->argv[0]);
     if (shell != NULL) {
       if (strcmp(shell, "zsh") == 0) {
-        const char *orig_zdotdir = getenv("ZDOTDIR");
+        const char* orig_zdotdir = getenv("ZDOTDIR");
         if (orig_zdotdir != NULL) {
-          envp = xrealloc(envp, (++n) * sizeof(char *));
+          envp = xrealloc(envp, (++n) * sizeof(char*));
           envp[i] = xmalloc(256);
           snprintf(envp[i], 256, "TABSH_ORIG_ZDOTDIR=%s", orig_zdotdir);
           i++;
         }
-        envp = xrealloc(envp, (++n) * sizeof(char *));
+        envp = xrealloc(envp, (++n) * sizeof(char*));
         envp[i] = xmalloc(256);
         snprintf(envp[i], 256, "ZDOTDIR=%s/zsh", init);
         i++;
       } else if (strcmp(shell, "fish") == 0) {
-        envp = xrealloc(envp, (++n) * sizeof(char *));
+        envp = xrealloc(envp, (++n) * sizeof(char*));
         envp[i] = xmalloc(256);
         snprintf(envp[i], 256, "XDG_CONFIG_HOME=%s/fish", init);
         i++;
       } else if (strcmp(shell, "sh") == 0 || strcmp(shell, "dash") == 0 || strcmp(shell, "ksh") == 0) {
-        const char *orig_env = getenv("ENV");
+        const char* orig_env = getenv("ENV");
         if (orig_env != NULL) {
-          envp = xrealloc(envp, (++n) * sizeof(char *));
+          envp = xrealloc(envp, (++n) * sizeof(char*));
           envp[i] = xmalloc(256);
           snprintf(envp[i], 256, "TABSH_ORIG_ENV=%s", orig_env);
           i++;
         }
-        envp = xrealloc(envp, (++n) * sizeof(char *));
+        envp = xrealloc(envp, (++n) * sizeof(char*));
         envp[i] = xmalloc(256);
         snprintf(envp[i], 256, "ENV=%s/env.sh", init);
         i++;
@@ -473,23 +466,23 @@ static char **build_env(struct pss_tty *pss) {
   return envp;
 }
 
-static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t columns, uint16_t rows) {
+static bool spawn_process(struct pss_tty* pss, const char* session_id, uint16_t columns, uint16_t rows) {
 #ifndef _WIN32
   notify_ctx_init(&pss->notify, session_id);
 #endif
-  pty_process *process = process_init(NULL, server->loop, build_args(pss), build_env(pss));
-  session_t *session = session_create(session_id, process, pss);
-  process->ctx = (void *)session;
+  pty_process* process = process_init(NULL, server->loop, build_args(pss), build_env(pss));
+  session_t* session = session_create(session_id, process, pss);
+  process->ctx = (void*)session;
 #ifndef _WIN32
   session->notify = pss->notify;
 #endif
-  const char *cwd = pss->cwd ? pss->cwd : server->cwd;
+  const char* cwd = pss->cwd ? pss->cwd : server->cwd;
   if (cwd != NULL) process->cwd = strdup(cwd);
   if (columns > 0) process->columns = columns;
   if (rows > 0) process->rows = rows;
   if (pty_spawn(process, process_read_cb, process_exit_cb) != 0) {
     lwsl_err("pty_spawn: %d (%s)\n", errno, strerror(errno));
-    uv_close((uv_handle_t *)session->timer, (uv_close_cb)free);
+    uv_close((uv_handle_t*)session->timer, (uv_close_cb)free);
     process_free(process);
 #ifndef _WIN32
     if (pss->notify != NULL) {
@@ -502,15 +495,15 @@ static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t 
   }
   lwsl_notice("started process, pid: %d\n", process->pid);
   session->root_pid = process->pid;
-  session->terminal = terminal_create(process->rows ? process->rows : 24,
-                                      process->columns ? process->columns : 80, pss);
+  session->terminal =
+      terminal_create(process->rows ? process->rows : 24, process->columns ? process->columns : 80, pss);
   pss->process = process;
   pss->session = session;
   strncpy(pss->session_id, session_id, SESSION_ID_LEN - 1);
   pss->session_id[SESSION_ID_LEN - 1] = '\0';
   if (pss->app_command != NULL) {
     size_t app_len = strlen(pss->app_command);
-    char *input = xmalloc(app_len + 2);
+    char* input = xmalloc(app_len + 2);
     memcpy(input, pss->app_command, app_len);
     input[app_len] = '\r';
     input[app_len + 1] = '\0';
@@ -523,23 +516,23 @@ static bool spawn_process(struct pss_tty *pss, const char *session_id, uint16_t 
   return true;
 }
 
-static void wsi_output(struct lws *wsi, pty_buf_t *buf) {
+static void wsi_output(struct lws* wsi, pty_buf_t* buf) {
   if (buf == NULL) return;
-  char *message = xmalloc(LWS_PRE + 1 + buf->len);
-  char *ptr = message + LWS_PRE;
+  char* message = xmalloc(LWS_PRE + 1 + buf->len);
+  char* ptr = message + LWS_PRE;
 
   *ptr = OUTPUT;
   memcpy(ptr + 1, buf->base, buf->len);
   size_t n = buf->len + 1;
 
-  if (lws_write(wsi, (unsigned char *)ptr, n, LWS_WRITE_BINARY) < n) {
+  if (lws_write(wsi, (unsigned char*)ptr, n, LWS_WRITE_BINARY) < n) {
     lwsl_err("write OUTPUT to WS\n");
   }
 
   free(message);
 }
 
-static bool check_auth(struct lws *wsi, struct pss_tty *pss) {
+static bool check_auth(struct lws* wsi, struct pss_tty* pss) {
   if (server->auth_header != NULL) {
     return lws_hdr_custom_copy(wsi, pss->user, sizeof(pss->user), server->auth_header, strlen(server->auth_header)) > 0;
   }
@@ -553,7 +546,7 @@ static bool check_auth(struct lws *wsi, struct pss_tty *pss) {
   return true;
 }
 
-static void attach_session(struct pss_tty *pss, session_t *session) {
+static void attach_session(struct pss_tty* pss, session_t* session) {
   session_attach(session, pss);
   pss->process = session->process;
   pss->session = session;
@@ -564,8 +557,8 @@ static void attach_session(struct pss_tty *pss, session_t *session) {
   lws_callback_on_writable(pss->wsi);
 }
 
-int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
-  struct pss_tty *pss = (struct pss_tty *)user;
+int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, void* in, size_t len) {
+  struct pss_tty* pss = (struct pss_tty*)user;
   char buf[256];
   size_t n = 0;
 
@@ -610,7 +603,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (server->url_arg) {
         while (lws_hdr_copy_fragment(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_URI_ARGS, n++) > 0) {
           if (strncmp(buf, "arg=", 4) == 0) {
-            pss->args = xrealloc(pss->args, (pss->argc + 1) * sizeof(char *));
+            pss->args = xrealloc(pss->args, (pss->argc + 1) * sizeof(char*));
             pss->args[pss->argc] = strdup(&buf[4]);
             pss->argc++;
           }
@@ -637,16 +630,21 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             /* Re-send current mouse mode so the reconnected client doesn't revert to 0. */
             if (pss->session && pss->session->terminal) {
               unsigned char mm[LWS_PRE + 2];
-              mm[LWS_PRE]     = MOUSE_MODE;
+              mm[LWS_PRE] = MOUSE_MODE;
               mm[LWS_PRE + 1] = pss->session->terminal->mouse_mode;
               lws_write(wsi, &mm[LWS_PRE], 2, LWS_WRITE_BINARY);
               /* Re-send altscreen state for the same reason. */
               unsigned char as[LWS_PRE + 2];
-              as[LWS_PRE]     = ALT_SCREEN;
+              as[LWS_PRE] = ALT_SCREEN;
               as[LWS_PRE + 1] = pss->session->terminal->altscreen_active;
               lws_write(wsi, &as[LWS_PRE], 2, LWS_WRITE_BINARY);
+              /* Re-send cursor blink state. */
+              unsigned char cb[LWS_PRE + 2];
+              cb[LWS_PRE] = CURSOR_BLINK;
+              cb[LWS_PRE + 1] = pss->session->terminal->cursor_blink_enabled ? 1 : 0;
+              lws_write(wsi, &cb[LWS_PRE], 2, LWS_WRITE_BINARY);
             }
-            uv_timer_t *t = xmalloc(sizeof(uv_timer_t));
+            uv_timer_t* t = xmalloc(sizeof(uv_timer_t));
             uv_timer_init(server->loop, t);
             t->data = pss->process;
             uv_timer_start(t, reattach_sigwinch_cb, 100, 0);
@@ -671,7 +669,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->pending_altscreen_send) {
         pss->pending_altscreen_send = false;
         unsigned char as[LWS_PRE + 2];
-        as[LWS_PRE]     = ALT_SCREEN;
+        as[LWS_PRE] = ALT_SCREEN;
         as[LWS_PRE + 1] = pss->pending_altscreen_value;
         lws_write(wsi, &as[LWS_PRE], 2, LWS_WRITE_BINARY);
         lws_callback_on_writable(pss->wsi);
@@ -682,8 +680,8 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->pending_app_send) {
         pss->pending_app_send = false;
         size_t app_len = strlen(pss->pending_app);
-        unsigned char *msg = xmalloc(LWS_PRE + 1 + app_len);
-        unsigned char *p = msg + LWS_PRE;
+        unsigned char* msg = xmalloc(LWS_PRE + 1 + app_len);
+        unsigned char* p = msg + LWS_PRE;
         p[0] = SET_APP_COMMAND;
         memcpy(p + 1, pss->pending_app, app_len);
         lws_write(wsi, p, 1 + app_len, LWS_WRITE_BINARY);
@@ -693,8 +691,8 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->pending_favicon_send) {
         pss->pending_favicon_send = false;
         size_t flen = strlen(pss->pending_favicon);
-        unsigned char *msg = xmalloc(LWS_PRE + 1 + flen);
-        unsigned char *p = msg + LWS_PRE;
+        unsigned char* msg = xmalloc(LWS_PRE + 1 + flen);
+        unsigned char* p = msg + LWS_PRE;
         p[0] = SET_APP_FAVICON;
         memcpy(p + 1, pss->pending_favicon, flen);
         lws_write(wsi, p, 1 + flen, LWS_WRITE_BINARY);
@@ -713,9 +711,9 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->session != NULL && pss->session->terminal != NULL) {
         /* drain scrollback BEFORE cell-diff so client appends history before refresh */
         size_t sblen;
-        const unsigned char *sb;
+        const unsigned char* sb;
         while ((sb = terminal_take_sb_line(pss->session->terminal, &sblen)) != NULL) {
-          if (lws_write(wsi, (unsigned char *)sb, sblen, LWS_WRITE_BINARY) < (int)sblen) {
+          if (lws_write(wsi, (unsigned char*)sb, sblen, LWS_WRITE_BINARY) < (int)sblen) {
             lwsl_err("write SB_PUSH\n");
             break;
           }
@@ -725,8 +723,8 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       if (pss->pending_frame && pss->session != NULL && pss->session->terminal != NULL) {
         pss->pending_frame = false;
         size_t frame_len;
-        const unsigned char *frame = terminal_encode_frame(pss->session->terminal, &frame_len);
-        if (lws_write(wsi, (unsigned char *)frame, frame_len, LWS_WRITE_BINARY) < (int)frame_len)
+        const unsigned char* frame = terminal_encode_frame(pss->session->terminal, &frame_len);
+        if (lws_write(wsi, (unsigned char*)frame, frame_len, LWS_WRITE_BINARY) < (int)frame_len)
           lwsl_err("write CELL_DIFF\n");
       }
 
@@ -734,17 +732,24 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
         uint8_t mode = 0;
         if (terminal_take_mouse_mode_change(pss->session->terminal, &mode)) {
           unsigned char buf2[LWS_PRE + 2];
-          buf2[LWS_PRE]     = MOUSE_MODE;
+          buf2[LWS_PRE] = MOUSE_MODE;
           buf2[LWS_PRE + 1] = mode;
           lws_write(wsi, &buf2[LWS_PRE], 2, LWS_WRITE_BINARY);
+        }
+        bool blink = false;
+        if (terminal_take_cursor_blink_change(pss->session->terminal, &blink)) {
+          unsigned char buf3[LWS_PRE + 2];
+          buf3[LWS_PRE] = CURSOR_BLINK;
+          buf3[LWS_PRE + 1] = blink ? 1 : 0;
+          lws_write(wsi, &buf3[LWS_PRE], 2, LWS_WRITE_BINARY);
         }
         /* Defer ALT_SCREEN to its own writable callback to avoid multiple lws_write
          * calls per callback — libwebsockets expects at most one write per invocation. */
         uint8_t altv = 0;
         if (terminal_take_altscreen_change(pss->session->terminal, &altv)) {
-          pss->pending_altscreen_send  = true;
+          pss->pending_altscreen_send = true;
           pss->pending_altscreen_value = altv;
-          pss->pending_frame           = true;
+          pss->pending_frame = true;
           lws_callback_on_writable(pss->wsi);
         }
       }
@@ -808,11 +813,11 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
           if (pss->process != NULL) break;
           uint16_t columns = 0;
           uint16_t rows = 0;
-          json_object *obj = parse_window_size(pss->buffer, pss->len, &columns, &rows);
+          json_object* obj = parse_window_size(pss->buffer, pss->len, &columns, &rows);
           if (server->credential != NULL) {
-            struct json_object *o = NULL;
+            struct json_object* o = NULL;
             if (json_object_object_get_ex(obj, "AuthToken", &o)) {
-              const char *token = json_object_get_string(o);
+              const char* token = json_object_get_string(o);
               if (token != NULL && !strcmp(token, server->credential))
                 pss->authenticated = true;
               else
@@ -825,15 +830,13 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             }
           }
 
-          struct json_object *cdiff = NULL;
-          if (json_object_object_get_ex(obj, "cellDiff", &cdiff) &&
-              json_object_get_boolean(cdiff))
+          struct json_object* cdiff = NULL;
+          if (json_object_object_get_ex(obj, "cellDiff", &cdiff) && json_object_get_boolean(cdiff))
             pss->cell_diff_enabled = true;
 
-          struct json_object *sid = NULL;
-          const char *client_session_id = NULL;
-          if (json_object_object_get_ex(obj, "sessionId", &sid))
-            client_session_id = json_object_get_string(sid);
+          struct json_object* sid = NULL;
+          const char* client_session_id = NULL;
+          if (json_object_object_get_ex(obj, "sessionId", &sid)) client_session_id = json_object_get_string(sid);
 
           if (client_session_id == NULL || strlen(client_session_id) != 36) {
             lwsl_err("missing or invalid sessionId in client message\n");
@@ -841,7 +844,7 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             return -1;
           }
 
-          session_t *existing = session_find(client_session_id);
+          session_t* existing = session_find(client_session_id);
           if (existing != NULL && existing->detached && process_running(existing->process)) {
             lwsl_notice("session %s reconnected\n", client_session_id);
             json_object_put(obj);
@@ -849,18 +852,16 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
             break;
           }
 
-          struct json_object *cwd_obj = NULL;
+          struct json_object* cwd_obj = NULL;
           if (json_object_object_get_ex(obj, "cwd", &cwd_obj)) {
-            const char *cwd_str = json_object_get_string(cwd_obj);
-            if (cwd_str != NULL && strlen(cwd_str) > 0)
-              pss->cwd = strdup(cwd_str);
+            const char* cwd_str = json_object_get_string(cwd_obj);
+            if (cwd_str != NULL && strlen(cwd_str) > 0) pss->cwd = strdup(cwd_str);
           }
 
-          struct json_object *app_obj = NULL;
+          struct json_object* app_obj = NULL;
           if (server->url_arg && json_object_object_get_ex(obj, "app", &app_obj)) {
-            const char *app_str = json_object_get_string(app_obj);
-            if (app_str != NULL && strlen(app_str) > 0)
-              pss->app_command = strdup(app_str);
+            const char* app_str = json_object_get_string(app_obj);
+            if (app_str != NULL && strlen(app_str) > 0) pss->app_command = strdup(app_str);
           }
 
           if (!spawn_process(pss, client_session_id, columns, rows)) {
@@ -890,8 +891,14 @@ int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, 
       lwsl_notice("WS closed from %s, clients: %d\n", pss->address, server->client_count);
       if (pss->buffer != NULL) free(pss->buffer);
       if (pss->pty_buf != NULL) pty_buf_free(pss->pty_buf);
-      if (pss->cwd != NULL) { free(pss->cwd); pss->cwd = NULL; }
-      if (pss->app_command != NULL) { free(pss->app_command); pss->app_command = NULL; }
+      if (pss->cwd != NULL) {
+        free(pss->cwd);
+        pss->cwd = NULL;
+      }
+      if (pss->app_command != NULL) {
+        free(pss->app_command);
+        pss->app_command = NULL;
+      }
       for (int i = 0; i < pss->argc; i++) {
         free(pss->args[i]);
       }

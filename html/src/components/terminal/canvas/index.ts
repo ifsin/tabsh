@@ -14,6 +14,7 @@ const enum S2C {
     SB_PUSH = '7',
     MOUSE_MODE = '8',
     ALT_SCREEN = '9',
+    CURSOR_BLINK = ':',
 }
 
 // Commands client → server
@@ -105,6 +106,7 @@ class CanvasRenderer {
     private cursorCol = 0;
     private cursorVisible = true;
     private cursorBlinkState = true;
+    private cursorBlinkEnabled = true;
     private cursorBlinkTimer = 0;
     private fgDefault: [number, number, number];
     private bgDefault: [number, number, number];
@@ -183,7 +185,7 @@ class CanvasRenderer {
     }
 
     private tickCursorBlink() {
-        if (!this.cursorVisible) return;
+        if (!this.cursorVisible || !this.cursorBlinkEnabled) return;
         this.cursorBlinkState = !this.cursorBlinkState;
         this.repaintViewport();
     }
@@ -459,6 +461,17 @@ class CanvasRenderer {
             this.scrollWrap.style.overflowY = '';
             this.updateInnerHeight();
             this.snapToBottom();
+        }
+        this.repaintViewport();
+    }
+
+    setCursorBlink(enabled: boolean) {
+        this.cursorBlinkEnabled = enabled;
+        if (enabled) {
+            this.cursorBlinkState = true;
+            this.startCursorBlink();
+        } else {
+            this.stopCursorBlink();
         }
         this.repaintViewport();
     }
@@ -918,6 +931,11 @@ export class Xterm {
             case S2C.ALT_SCREEN:
                 this.renderer?.setAltScreen((new Uint8Array(data)[0] ?? 0) === 1);
                 break;
+            case S2C.CURSOR_BLINK: {
+                const enabled = (new Uint8Array(data)[0] ?? 1) === 1;
+                this.renderer?.setCursorBlink(enabled);
+                break;
+            }
             case S2C.SET_APP_COMMAND:
             case S2C.SET_APP_FAVICON:
                 break;

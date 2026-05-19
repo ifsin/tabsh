@@ -146,6 +146,20 @@ static int screen_settermprop(VTermProp prop, VTermValue *val, void *user) {
       term->altscreen_changed = true;
     }
   }
+  if (prop == VTERM_PROP_CURSORBLINK) {
+    bool new_v = val->boolean != 0;
+    if (new_v != term->cursor_blink_enabled) {
+      term->cursor_blink_enabled = new_v;
+      term->cursor_blink_changed = true;
+    }
+  }
+  if (prop == VTERM_PROP_CURSORVISIBLE) {
+    bool new_v = val->boolean != 0;
+    if (new_v != term->cursor_visible) {
+      term->cursor_visible = new_v;
+      term->cursor_dirty = true;
+    }
+  }
   return 1;
 }
 
@@ -213,6 +227,13 @@ bool terminal_take_altscreen_change(terminal_t *term, uint8_t *out) {
   return true;
 }
 
+bool terminal_take_cursor_blink_change(terminal_t *term, bool *out) {
+  if (!term->cursor_blink_changed) return false;
+  term->cursor_blink_changed = false;
+  *out = term->cursor_blink_enabled;
+  return true;
+}
+
 terminal_t *terminal_create(uint16_t rows, uint16_t cols, void *pss) {
   terminal_t *term = xmalloc(sizeof(terminal_t));
   memset(term, 0, sizeof(terminal_t));
@@ -220,6 +241,7 @@ terminal_t *terminal_create(uint16_t rows, uint16_t cols, void *pss) {
   term->cols = cols;
   term->pss  = pss;
   term->cursor_visible = true;
+  term->cursor_blink_enabled = true;
 
   term->vt = vterm_new(rows, cols);
   vterm_set_utf8(term->vt, 1);
