@@ -76,8 +76,6 @@ typedef struct session {
 struct pss_tty {
   bool initialized;
   int initial_cmd_index;
-  bool authenticated;
-  char user[30];
   char address[50];
   char path[128];
   char **args;
@@ -124,8 +122,6 @@ struct pss_tty {
 struct server {
   int client_count;        // client count
   char *prefs_json;        // client preferences
-  char *credential;        // encoded basic auth credential
-  char *auth_header;       // header name used for auth proxy
   char *index;             // custom index.html
   char *Bell;              // custom Bull.mp3
   char *command;           // full command line
@@ -136,11 +132,9 @@ struct server {
   char sig_name[20];       // human readable signal string
   bool url_arg;            // allow client to send cli arguments in URL
   bool writable;           // whether clients to write to the TTY
-  bool check_origin;       // whether allow websocket connection from different origin
   int max_clients;         // maximum clients to support
   bool once;               // whether accept only one client and exit on disconnection
   bool exit_no_conn;       // whether exit on all clients disconnection
-  char socket_path[255];   // UNIX domain socket path
   char terminal_type[30];  // terminal type to report
 
   uv_loop_t *loop;         // the libuv event loop

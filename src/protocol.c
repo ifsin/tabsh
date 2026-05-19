@@ -392,13 +392,6 @@ static char** build_env(struct pss_tty* pss) {
   snprintf(envp[i], 24, "COLORTERM=truecolor");
   i++;
 
-  if (strlen(pss->user) > 0) {
-    envp = xrealloc(envp, (++n) * sizeof(char*));
-    envp[i] = xmalloc(40);
-    snprintf(envp[i], 40, "TTYD_USER=%s", pss->user);
-    i++;
-  }
-
 #ifndef _WIN32
   if (pss->notify != NULL) {
     const char* shim = notify_shim_dir(pss->notify);
@@ -515,20 +508,6 @@ static bool spawn_process(struct pss_tty* pss, const char* session_id, uint16_t 
 }
 
 
-static bool check_auth(struct lws* wsi, struct pss_tty* pss) {
-  if (server->auth_header != NULL) {
-    return lws_hdr_custom_copy(wsi, pss->user, sizeof(pss->user), server->auth_header, strlen(server->auth_header)) > 0;
-  }
-
-  if (server->credential != NULL) {
-    char buf[256];
-    size_t n = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
-    return n >= 7 && strstr(buf, "Basic ") && !strcmp(buf + 6, server->credential);
-  }
-
-  return true;
-}
-
 static void attach_session(struct pss_tty* pss, session_t* session) {
   session_attach(session, pss);
   pss->process = session->process;
@@ -556,8 +535,6 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
         lwsl_warn("refuse to serve WS client due to the --max-clients option.\n");
         return 1;
       }
-      if (!check_auth(wsi, pss)) return 1;
-
       n = lws_hdr_copy(wsi, pss->path, sizeof(pss->path), WSI_TOKEN_GET_URI);
 #if defined(LWS_ROLE_H2)
       if (n <= 0) n = lws_hdr_copy(wsi, pss->path, sizeof(pss->path), WSI_TOKEN_HTTP_COLON_PATH);
@@ -566,18 +543,10 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
         lwsl_warn("refuse to serve WS client for illegal ws path: %s\n", pss->path);
         return 1;
       }
-
-      if (server->check_origin && !check_host_origin(wsi)) {
-        lwsl_warn(
-            "refuse to serve WS client from different origin due to the "
-            "--check-origin option.\n");
-        return 1;
-      }
       break;
 
     case LWS_CALLBACK_ESTABLISHED:
       pss->initialized = false;
-      pss->authenticated = false;
       pss->intentional_close = false;
       pss->wsi = wsi;
       pss->lws_close_status = LWS_CLOSE_STATUS_NOSTATUS;
@@ -780,12 +749,6 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
 
       const char command = pss->buffer[0];
 
-      // check auth
-      if (server->credential != NULL && !pss->authenticated && command != JSON_DATA) {
-        lwsl_warn("WS client not authenticated\n");
-        return 1;
-      }
-
       // check if there are more fragmented messages
       if (lws_remaining_packet_payload(wsi) > 0 || !lws_is_final_fragment(wsi)) {
         return 0;
@@ -830,21 +793,6 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
           uint16_t columns = 0;
           uint16_t rows = 0;
           json_object* obj = parse_window_size(pss->buffer, pss->len, &columns, &rows);
-          if (server->credential != NULL) {
-            struct json_object* o = NULL;
-            if (json_object_object_get_ex(obj, "AuthToken", &o)) {
-              const char* token = json_object_get_string(o);
-              if (token != NULL && !strcmp(token, server->credential))
-                pss->authenticated = true;
-              else
-                lwsl_warn("WS authentication failed with token: %s\n", token);
-            }
-            if (!pss->authenticated) {
-              json_object_put(obj);
-              lws_close_reason(wsi, LWS_CLOSE_STATUS_POLICY_VIOLATION, NULL, 0);
-              return -1;
-            }
-          }
 
           struct json_object* sid = NULL;
           const char* client_session_id = NULL;

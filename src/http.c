@@ -9,42 +9,8 @@
 #include "server.h"
 #include "utils.h"
 
-enum { AUTH_OK, AUTH_FAIL, AUTH_ERROR };
-
 static char *html_cache = NULL;
 static size_t html_cache_len = 0;
-
-static int send_unauthorized(struct lws *wsi, unsigned int code, enum lws_token_indexes header) {
-  unsigned char buffer[1024 + LWS_PRE], *p, *end;
-  p = buffer + LWS_PRE;
-  end = p + sizeof(buffer) - LWS_PRE;
-
-  if (lws_add_http_header_status(wsi, code, &p, end) ||
-      lws_add_http_header_by_token(wsi, header, (unsigned char *)"Basic realm=\"ttyd\"", 18, &p, end) ||
-      lws_add_http_header_content_length(wsi, 0, &p, end) || lws_finalize_http_header(wsi, &p, end) ||
-      lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
-    return AUTH_FAIL;
-
-  return lws_http_transaction_completed(wsi) ? AUTH_FAIL : AUTH_ERROR;
-}
-
-static int check_auth(struct lws *wsi, struct pss_http *pss) {
-  if (server->auth_header != NULL) {
-    if (lws_hdr_custom_length(wsi, server->auth_header, strlen(server->auth_header)) > 0) return AUTH_OK;
-    return send_unauthorized(wsi, HTTP_STATUS_PROXY_AUTH_REQUIRED, WSI_TOKEN_HTTP_PROXY_AUTHENTICATE);
-  }
-
-  if(server->credential != NULL) {
-    char buf[256];
-    int len = lws_hdr_copy(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_AUTHORIZATION);
-    if (len >= 7 && strstr(buf, "Basic ")) {
-      if (!strcmp(buf + 6, server->credential)) return AUTH_OK;
-    }
-    return send_unauthorized(wsi, HTTP_STATUS_UNAUTHORIZED, WSI_TOKEN_HTTP_WWW_AUTHENTICATE);
-  }
-
-  return AUTH_OK;
-}
 
 static bool accept_gzip(struct lws *wsi) {
   char buf[256];
@@ -120,22 +86,11 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
     case LWS_CALLBACK_HTTP:
       access_log(wsi, (const char *)in);
       snprintf(pss->path, sizeof(pss->path), "%s", (const char *)in);
-      switch (check_auth(wsi, pss)) {
-        case AUTH_OK:
-          break;
-        case AUTH_FAIL:
-          return 0;
-        case AUTH_ERROR:
-        default:
-          return 1;
-      }
-
       p = buffer + LWS_PRE;
       end = p + sizeof(buffer) - LWS_PRE;
 
       if (strcmp(pss->path, endpoints.token) == 0) {
-        const char *credential = server->credential != NULL ? server->credential : "";
-        size_t n = snprintf(buf, sizeof(buf), "{\"token\": \"%s\"}", credential);
+        size_t n = snprintf(buf, sizeof(buf), "{\"token\": \"\"}");
         if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
                                          (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||

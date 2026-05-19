@@ -53,10 +53,6 @@ static lws_retry_bo_t retry = {
 
 // command line options
 static const struct option options[] = {{"port", required_argument, NULL, 'p'},
-                                        {"interface", required_argument, NULL, 'i'},
-                                        {"socket-owner", required_argument, NULL, 'U'},
-                                        {"credential", required_argument, NULL, 'c'},
-                                        {"auth-header", required_argument, NULL, 'H'},
                                         {"uid", required_argument, NULL, 'u'},
                                         {"gid", required_argument, NULL, 'g'},
                                         {"signal", required_argument, NULL, 's'},
@@ -68,7 +64,6 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"ping-interval", required_argument, NULL, 'P'},
 #endif
                                         {"srv-buf-size", required_argument, NULL, 'f'},
-                                        {"ipv6", no_argument, NULL, '6'},
                                         {"ssl", no_argument, NULL, 'S'},
                                         {"ssl-cert", required_argument, NULL, 'C'},
                                         {"ssl-key", required_argument, NULL, 'K'},
@@ -77,7 +72,6 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"writable", no_argument, NULL, 'W'},
                                         {"terminal-type", required_argument, NULL, 'T'},
                                         {"client-option", required_argument, NULL, 't'},
-                                        {"check-origin", no_argument, NULL, 'O'},
                                         {"max-clients", required_argument, NULL, 'm'},
                                         {"once", no_argument, NULL, 'o'},
                                         {"exit-no-conn", no_argument, NULL, 'q'},
@@ -86,7 +80,7 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"version", no_argument, NULL, 'v'},
                                         {"help", no_argument, NULL, 'h'},
                                         {NULL, 0, 0, 0}};
-static const char *opt_string = "p:i:U:c:H:u:g:s:w:I:e:b:P:f:6aSC:K:A:Wt:T:Om:oqBd:vh";
+static const char *opt_string = "p:u:g:s:w:I:e:b:P:f:aSC:K:A:Wt:T:m:oqBd:vh";
 
 static void print_help() {
   // clang-format off
@@ -97,10 +91,6 @@ static void print_help() {
           "    %s\n\n"
           "OPTIONS:\n"
           "    -p, --port              Port to listen (default: 7681, use `0` for random port)\n"
-          "    -i, --interface         Network interface to bind (eg: eth0), or UNIX domain socket path (eg: /var/run/ttyd.sock)\n"
-          "    -U, --socket-owner      User owner of the UNIX domain socket file, when enabled (eg: user:group)\n"
-          "    -c, --credential        Credential for basic authentication (format: username:password)\n"
-          "    -H, --auth-header       HTTP Header name for auth proxy, this will configure ttyd to let a HTTP reverse proxy handle authentication\n"
           "    -u, --uid               User id to run with\n"
           "    -g, --gid               Group id to run with\n"
           "    -s, --signal            Signal to send to the command when exit it (default: 1, SIGHUP)\n"
@@ -109,7 +99,6 @@ static void print_help() {
           "    -W, --writable          Allow clients to write to the TTY (readonly by default)\n"
           "    -t, --client-option     Send option to client (format: key=value), repeat to add more options\n"
           "    -T, --terminal-type     Terminal type to report, default: xterm-256color\n"
-          "    -O, --check-origin      Do not allow websocket connection from different origin\n"
           "    -m, --max-clients       Maximum clients to support (default: 0, no limit)\n"
           "    -o, --once              Accept only one client and exit on disconnection\n"
           "    -q, --exit-no-conn      Exit on all clients disconnection\n"
@@ -122,7 +111,6 @@ static void print_help() {
 #endif
           "    -f, --srv-buf-size      Maximum chunk of file (in bytes) that can be sent at once, a larger value may improve throughput (default: 4096)\n"
 #ifdef LWS_WITH_IPV6
-          "    -6, --ipv6              Enable IPv6 support\n"
 #endif
 #if defined(LWS_OPENSSL_SUPPORT) || defined(LWS_WITH_TLS)
           "    -S, --ssl               Enable SSL\n"
@@ -141,7 +129,6 @@ static void print_help() {
 
 static void print_config() {
   lwsl_notice("tty configuration:\n");
-  if (server->credential != NULL) lwsl_notice("  credential: %s\n", server->credential);
   lwsl_notice("  start command: %s\n", server->command);
   lwsl_notice("  close signal: %s (%d)\n", server->sig_name, server->sig_code);
   lwsl_notice("  terminal type: %s\n", server->terminal_type);
@@ -153,8 +140,6 @@ static void print_config() {
     lwsl_notice("  websocket: %s\n", endpoints.ws);
     lwsl_notice("  Bell     : %s\n", endpoints.Bell);
   }
-  if (server->auth_header != NULL) lwsl_notice("  auth header: %s\n", server->auth_header);
-  if (server->check_origin) lwsl_notice("  check origin: true\n");
   if (server->url_arg) lwsl_notice("  allow url arg: true\n");
   if (server->max_clients > 0) lwsl_notice("  max clients: %d\n", server->max_clients);
   if (server->once) lwsl_notice("  once: true\n");
@@ -210,8 +195,6 @@ static struct server *server_new(int argc, char **argv, int start) {
 
 static void server_free(struct server *ts) {
   if (ts == NULL) return;
-  if (ts->credential != NULL) free(ts->credential);
-  if (ts->auth_header != NULL) free(ts->auth_header);
   if (ts->index != NULL) free(ts->index);
   if (ts->cwd != NULL) free(ts->cwd);
   free(ts->command);
@@ -220,13 +203,6 @@ static void server_free(struct server *ts) {
   char **p = ts->argv;
   for (; *p; p++) free(*p);
   free(ts->argv);
-
-  if (strlen(ts->socket_path) > 0) {
-    struct stat st;
-    if (!stat(ts->socket_path, &st)) {
-      unlink(ts->socket_path);
-    }
-  }
 
   uv_loop_close(ts->loop);
 
@@ -316,7 +292,7 @@ int main(int argc, char **argv) {
   struct lws_context_creation_info info;
   memset(&info, 0, sizeof(info));
   info.port = 7681;
-  info.iface = NULL;
+  info.iface = "127.0.0.1";
   info.protocols = protocols;
   info.gid = -1;
   info.uid = -1;
@@ -328,8 +304,6 @@ int main(int argc, char **argv) {
   info.max_http_header_data = 65535;
 
   int debug_level = LLL_ERR | LLL_WARN | LLL_NOTICE;
-  char iface[128] = "";
-  char socket_owner[128] = "";
   bool browser = false;
   bool ssl = false;
   char cert_path[1024] = "";
@@ -361,9 +335,6 @@ int main(int argc, char **argv) {
       case 'W':
         server->writable = true;
         break;
-      case 'O':
-        server->check_origin = true;
-        break;
       case 'm':
         server->max_clients = parse_int("max-clients", optarg);
         break;
@@ -382,26 +353,6 @@ int main(int argc, char **argv) {
           fprintf(stderr, "ttyd: invalid port: %s\n", optarg);
           return -1;
         }
-        break;
-      case 'i':
-        strncpy(iface, optarg, sizeof(iface) - 1);
-        iface[sizeof(iface) - 1] = '\0';
-        break;
-      case 'U':
-        strncpy(socket_owner, optarg, sizeof(socket_owner) - 1);
-        socket_owner[sizeof(socket_owner) - 1] = '\0';
-        break;
-      case 'c':
-        if (strchr(optarg, ':') == NULL) {
-          fprintf(stderr, "ttyd: invalid credential, format: username:password\n");
-          return -1;
-        }
-        char b64_text[256];
-        lws_b64_encode_string(optarg, strlen(optarg), b64_text, sizeof(b64_text));
-        server->credential = strdup(b64_text);
-        break;
-      case 'H':
-        server->auth_header = strdup(optarg);
         break;
       case 'u':
         info.uid = parse_int("uid", optarg);
@@ -490,9 +441,6 @@ int main(int argc, char **argv) {
         }
         info.pt_serv_buf_size = serv_buf_size;
       } break;
-      case '6':
-        info.options &= ~(LWS_SERVER_OPTION_DISABLE_IPV6);
-        break;
 #if defined(LWS_OPENSSL_SUPPORT) || defined(LWS_WITH_TLS)
       case 'S':
         ssl = true;
@@ -559,23 +507,6 @@ int main(int argc, char **argv) {
   info.retry_and_idle_policy = &retry;
 #endif
 
-  if (strlen(iface) > 0) {
-    info.iface = iface;
-    if (endswith(info.iface, ".sock") || endswith(info.iface, ".socket")) {
-#if defined(LWS_USE_UNIX_SOCK) || defined(LWS_WITH_UNIX_SOCK)
-      info.options |= LWS_SERVER_OPTION_UNIX_SOCK;
-      info.port = 0;  // warmcat/libwebsockets#1985
-      strncpy(server->socket_path, info.iface, sizeof(server->socket_path) - 1);
-      if (strlen(socket_owner) > 0) {
-        info.unix_socket_perms = socket_owner;
-      }
-#else
-      fprintf(stderr, "libwebsockets is not compiled with UNIX domain socket support");
-      return -1;
-#endif
-    }
-  }
-
 #if defined(LWS_OPENSSL_SUPPORT) || defined(LWS_WITH_TLS)
   if (ssl) {
     info.ssl_cert_filepath = cert_path;
@@ -593,14 +524,6 @@ int main(int argc, char **argv) {
 
   lwsl_notice("ttyd %s (libwebsockets %s)\n", TTYD_VERSION, LWS_LIBRARY_VERSION);
   print_config();
-
-  // lws custom header requires lower case name, and terminating :
-  if (server->auth_header != NULL) {
-    size_t auth_header_len = strlen(server->auth_header);
-    server->auth_header = xrealloc(server->auth_header, auth_header_len + 2);
-    strcat(server->auth_header + auth_header_len, ":");
-    lowercase(server->auth_header);
-  }
 
   void *foreign_loops[1];
   foreign_loops[0] = server->loop;
