@@ -69,9 +69,10 @@ static int screen_damage(VTermRect rect, void *user) {
 }
 
 static int screen_movecursor(VTermPos pos, VTermPos oldpos, int visible, void *user) {
-  (void)pos; (void)oldpos; (void)visible;
+  (void)pos; (void)oldpos;
   terminal_t *term = (terminal_t *)user;
   term->cursor_dirty = true;
+  term->cursor_visible = (visible != 0);
   return 1;
 }
 
@@ -218,6 +219,7 @@ terminal_t *terminal_create(uint16_t rows, uint16_t cols, void *pss) {
   term->rows = rows;
   term->cols = cols;
   term->pss  = pss;
+  term->cursor_visible = true;
 
   term->vt = vterm_new(rows, cols);
   vterm_set_utf8(term->vt, 1);
@@ -285,7 +287,7 @@ const unsigned char *terminal_encode_frame(terminal_t *term, size_t *out_len) {
 
   /* 8-byte header (first byte is the WS command prefix '6' = CELL_DIFF) */
   p[0] = '6';
-  p[1] = 0x01;  /* flags: cursor_visible */
+  p[1] = term->cursor_visible ? 0x01 : 0x00;  /* flags: cursor_visible */
   p[2] = (uint8_t)(cursor.row & 0xff);
   p[3] = (uint8_t)((cursor.row >> 8) & 0xff);
   p[4] = (uint8_t)(cursor.col & 0xff);

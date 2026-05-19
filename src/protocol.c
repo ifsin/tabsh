@@ -395,6 +395,11 @@ static char **build_env(struct pss_tty *pss) {
   snprintf(envp[i], 36, "TERM=%s", server->terminal_type);
   i++;
 
+  // COLORTERM — signal 24-bit truecolor support to applications
+  envp[i] = xmalloc(24);
+  snprintf(envp[i], 24, "COLORTERM=truecolor");
+  i++;
+
   // TTYD_USER
   if (strlen(pss->user) > 0) {
     envp = xrealloc(envp, (++n) * sizeof(char *));

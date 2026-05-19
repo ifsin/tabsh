@@ -34,6 +34,7 @@ typedef struct terminal_s {
   cell_entry_t dirty[TERM_MAX_CELLS];
   int          dirty_count;
   bool         cursor_dirty;
+  bool         cursor_visible;
 
   unsigned char *frame_buf;
   size_t         frame_buf_cap;

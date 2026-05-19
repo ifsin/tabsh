@@ -104,6 +104,8 @@ class CanvasRenderer {
     private cursorRow = 0;
     private cursorCol = 0;
     private cursorVisible = true;
+    private cursorBlinkState = true;
+    private cursorBlinkTimer = 0;
     private fgDefault: [number, number, number];
     private bgDefault: [number, number, number];
     private cursorColor: [number, number, number];
@@ -111,6 +113,8 @@ class CanvasRenderer {
     private fontBold = '';
     private fontItalic = '';
     private fontBoldItalic = '';
+    private fontAscent = 12;
+    private fontDescent = 3;
     scrollback: Cell[][] = [];
     // droppedCount = total lines ever evicted from sb head; keeps absLine stable.
     private droppedCount = 0;
@@ -147,6 +151,7 @@ class CanvasRenderer {
         this.measureCell();
 
         this.scrollWrap.addEventListener('scroll', () => this.onScroll(), { passive: true });
+        this.startCursorBlink();
     }
 
     private measureCell() {
@@ -159,9 +164,29 @@ class CanvasRenderer {
         const m = this.ctx.measureText('M');
         this.cellW = Math.round(Math.max(1, Math.round(m.width)) * this.dpr) / this.dpr;
         this.cellH = Math.round(Math.max(1, Math.round(this.fontSize * 1.3)) * this.dpr) / this.dpr;
+        this.fontAscent = m.actualBoundingBoxAscent;
+        this.fontDescent = m.actualBoundingBoxDescent;
     }
 
     focus() { this.canvas.focus(); }
+
+    private startCursorBlink() {
+        this.stopCursorBlink();
+        this.cursorBlinkTimer = window.setInterval(() => this.tickCursorBlink(), 530);
+    }
+
+    private stopCursorBlink() {
+        if (this.cursorBlinkTimer) {
+            clearInterval(this.cursorBlinkTimer);
+            this.cursorBlinkTimer = 0;
+        }
+    }
+
+    private tickCursorBlink() {
+        if (!this.cursorVisible) return;
+        this.cursorBlinkState = !this.cursorBlinkState;
+        this.repaintViewport();
+    }
 
     fit(width: number, height: number): { cols: number; rows: number } {
         const cols = Math.max(1, Math.floor(width / this.cellW));
@@ -189,7 +214,7 @@ class CanvasRenderer {
         this.canvas.width = Math.round(w * this.dpr);
         this.canvas.height = Math.round(h * this.dpr);
         this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-        this.ctx.textBaseline = 'top';
+        this.ctx.textBaseline = 'alphabetic';
 
         this.updateInnerHeight();
         this.viewFirstLine = this.droppedCount + Math.floor(this.scrollWrap.scrollTop / this.cellH);
@@ -252,7 +277,7 @@ class CanvasRenderer {
 
         // Draw cursor only when it falls within the visible viewport.
         const cursorAbsLine = this.droppedCount + sbLen + this.cursorRow;
-        if (this.cursorVisible &&
+        if (this.cursorVisible && this.cursorBlinkState &&
             cursorAbsLine >= this.viewFirstLine &&
             cursorAbsLine < this.viewFirstLine + this.rows &&
             this.cursorRow < this.rows && this.cursorCol < this.cols) {
@@ -354,6 +379,9 @@ class CanvasRenderer {
         const curCol = v.getUint16(3, true);
         const count = v.getUint16(5, true);
         this.cursorVisible = (flags & 0x01) !== 0;
+        if (this.cursorVisible) {
+            this.cursorBlinkState = true;
+        }
 
         const wasAtBottom = this.isAtBottom();
 
@@ -466,17 +494,19 @@ class CanvasRenderer {
                         : this.fontNormal;
             this.ctx.fillStyle = `rgb(${fr},${fg},${fb})`;
 
+            const textH = this.fontAscent + this.fontDescent;
+            const yBase = y + (this.cellH - textH) / 2 + this.fontAscent;
             if (wide) {
                 // Clip wide glyphs to their span so they can't bleed into unrelated cells.
                 this.ctx.save();
                 this.ctx.beginPath();
                 this.ctx.rect(x, y, cellSpan, this.cellH);
                 this.ctx.clip();
-                this.ctx.fillText(String.fromCodePoint(cell.cp), x, y + 1);
+                this.ctx.fillText(String.fromCodePoint(cell.cp), x, yBase);
                 this.ctx.restore();
-                this.ctx.textBaseline = 'top'; // restore after save/restore
+                this.ctx.textBaseline = 'alphabetic'; // restore after save/restore
             } else {
-                this.ctx.fillText(String.fromCodePoint(cell.cp), x, y + 1);
+                this.ctx.fillText(String.fromCodePoint(cell.cp), x, yBase);
             }
         }
 
