@@ -35,8 +35,6 @@
 struct endpoints {
   char *ws;
   char *index;
-  char *token;
-  char *parent;
   char *Bell;
   char *favicon;
   char *content;
@@ -78,8 +76,6 @@ struct pss_tty {
   int initial_cmd_index;
   char address[50];
   char path[128];
-  char **args;
-  int argc;
   char session_id[SESSION_ID_LEN];
 
   struct lws *wsi;
@@ -122,19 +118,13 @@ struct pss_tty {
 struct server {
   int client_count;        // client count
   char *prefs_json;        // client preferences
-  char *index;             // custom index.html
-  char *Bell;              // custom Bull.mp3
   char *command;           // full command line
   char **argv;             // command with arguments
   int argc;                // command + arguments count
   char *cwd;               // working directory
   int sig_code;            // close signal
   char sig_name[20];       // human readable signal string
-  bool url_arg;            // allow client to send cli arguments in URL
-  bool writable;           // whether clients to write to the TTY
   int max_clients;         // maximum clients to support
-  bool once;               // whether accept only one client and exit on disconnection
-  bool exit_no_conn;       // whether exit on all clients disconnection
   char terminal_type[30];  // terminal type to report
 
   uv_loop_t *loop;         // the libuv event loop

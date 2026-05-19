@@ -17,7 +17,6 @@ const initialApp = params.get('app') ?? undefined;
 
 // WS URL does not include ?app — server gets it from JSON_DATA handshake
 const wsUrl = [protocol, '//', window.location.host, basePath, '/ws'].join('');
-const tokenUrl = [window.location.protocol, '//', window.location.host, basePath, '/token'].join('');
 
 const clientOptions: ClientOptions = {
     disableLeaveAlert: false,
@@ -79,7 +78,6 @@ export class App extends Component {
             <Terminal
                 id="terminal-container"
                 wsUrl={wsUrl}
-                tokenUrl={tokenUrl}
                 clientOptions={clientOptions}
                 termOptions={termOptions}
                 flowControl={flowControl}

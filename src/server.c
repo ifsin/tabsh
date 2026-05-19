@@ -21,7 +21,7 @@
 volatile bool force_exit = false;
 struct lws_context *context;
 struct server *server;
-struct endpoints endpoints = {"/ws", "/", "/token", "", "/Bell.mp3", "/favicon/", "/content"};
+struct endpoints endpoints = {"/ws", "/", "/Bell.mp3", "/favicon/", "/content"};
 
 extern int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
 extern int callback_tty(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len);
@@ -57,30 +57,17 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"gid", required_argument, NULL, 'g'},
                                         {"signal", required_argument, NULL, 's'},
                                         {"cwd", required_argument, NULL, 'w'},
-                                        {"index", required_argument, NULL, 'I'},
-                                        {"Bell", required_argument, NULL, 'e'},
-                                        {"base-path", required_argument, NULL, 'b'},
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
                                         {"ping-interval", required_argument, NULL, 'P'},
 #endif
-                                        {"srv-buf-size", required_argument, NULL, 'f'},
-                                        {"ssl", no_argument, NULL, 'S'},
-                                        {"ssl-cert", required_argument, NULL, 'C'},
-                                        {"ssl-key", required_argument, NULL, 'K'},
-                                        {"ssl-ca", required_argument, NULL, 'A'},
-                                        {"url-arg", no_argument, NULL, 'a'},
-                                        {"writable", no_argument, NULL, 'W'},
                                         {"terminal-type", required_argument, NULL, 'T'},
                                         {"client-option", required_argument, NULL, 't'},
                                         {"max-clients", required_argument, NULL, 'm'},
-                                        {"once", no_argument, NULL, 'o'},
-                                        {"exit-no-conn", no_argument, NULL, 'q'},
-                                        {"browser", no_argument, NULL, 'B'},
                                         {"debug", required_argument, NULL, 'd'},
                                         {"version", no_argument, NULL, 'v'},
                                         {"help", no_argument, NULL, 'h'},
                                         {NULL, 0, 0, 0}};
-static const char *opt_string = "p:u:g:s:w:I:e:b:P:f:aSC:K:A:Wt:T:m:oqBd:vh";
+static const char *opt_string = "p:u:g:s:w:P:t:T:m:d:vh";
 
 static void print_help() {
   // clang-format off
@@ -95,28 +82,11 @@ static void print_help() {
           "    -g, --gid               Group id to run with\n"
           "    -s, --signal            Signal to send to the command when exit it (default: 1, SIGHUP)\n"
           "    -w, --cwd               Working directory to be set for the child program\n"
-          "    -a, --url-arg           Allow client to send command line arguments in URL (eg: http://localhost:7681?arg=foo&arg=bar)\n"
-          "    -W, --writable          Allow clients to write to the TTY (readonly by default)\n"
           "    -t, --client-option     Send option to client (format: key=value), repeat to add more options\n"
           "    -T, --terminal-type     Terminal type to report, default: xterm-256color\n"
           "    -m, --max-clients       Maximum clients to support (default: 0, no limit)\n"
-          "    -o, --once              Accept only one client and exit on disconnection\n"
-          "    -q, --exit-no-conn      Exit on all clients disconnection\n"
-          "    -B, --browser           Open terminal with the default system browser\n"
-          "    -I, --index             Custom index.html path\n"
-          "    -e, --Bell              Custom Bell.mp3 path\n"
-          "    -b, --base-path         Expected base path for requests coming from a reverse proxy (eg: /mounted/here, max length: 128)\n"
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
           "    -P, --ping-interval     Websocket ping interval(sec) (default: 5)\n"
-#endif
-          "    -f, --srv-buf-size      Maximum chunk of file (in bytes) that can be sent at once, a larger value may improve throughput (default: 4096)\n"
-#ifdef LWS_WITH_IPV6
-#endif
-#if defined(LWS_OPENSSL_SUPPORT) || defined(LWS_WITH_TLS)
-          "    -S, --ssl               Enable SSL\n"
-          "    -C, --ssl-cert          SSL certificate file path\n"
-          "    -K, --ssl-key           SSL key file path\n"
-          "    -A, --ssl-ca            SSL CA file path for client certificate verification\n"
 #endif
           "    -d, --debug             Set log level (default: 7)\n"
           "    -v, --version           Print the version and exit\n"
@@ -132,22 +102,8 @@ static void print_config() {
   lwsl_notice("  start command: %s\n", server->command);
   lwsl_notice("  close signal: %s (%d)\n", server->sig_name, server->sig_code);
   lwsl_notice("  terminal type: %s\n", server->terminal_type);
-  if (endpoints.parent[0]) {
-    lwsl_notice("endpoints:\n");
-    lwsl_notice("  base-path: %s\n", endpoints.parent);
-    lwsl_notice("  index    : %s\n", endpoints.index);
-    lwsl_notice("  token    : %s\n", endpoints.token);
-    lwsl_notice("  websocket: %s\n", endpoints.ws);
-    lwsl_notice("  Bell     : %s\n", endpoints.Bell);
-  }
-  if (server->url_arg) lwsl_notice("  allow url arg: true\n");
   if (server->max_clients > 0) lwsl_notice("  max clients: %d\n", server->max_clients);
-  if (server->once) lwsl_notice("  once: true\n");
-  if (server->exit_no_conn) lwsl_notice("  exit_no_conn: true\n");
-  if (server->index != NULL) lwsl_notice("  custom index.html: %s\n", server->index);
-  if (server->Bell != NULL) lwsl_notice("  custom Bell.mp3: %s\n", server->Bell);
   if (server->cwd != NULL) lwsl_notice("  working directory: %s\n", server->cwd);
-  if (!server->writable) lwsl_warn("The --writable option is not set, will start in readonly mode\n");
 }
 
 static struct server *server_new(int argc, char **argv, int start) {
@@ -195,7 +151,6 @@ static struct server *server_new(int argc, char **argv, int start) {
 
 static void server_free(struct server *ts) {
   if (ts == NULL) return;
-  if (ts->index != NULL) free(ts->index);
   if (ts->cwd != NULL) free(ts->cwd);
   free(ts->command);
   free(ts->prefs_json);
@@ -304,11 +259,6 @@ int main(int argc, char **argv) {
   info.max_http_header_data = 65535;
 
   int debug_level = LLL_ERR | LLL_WARN | LLL_NOTICE;
-  bool browser = false;
-  bool ssl = false;
-  char cert_path[1024] = "";
-  char key_path[1024] = "";
-  char ca_path[1024] = "";
 
   struct json_object *client_prefs = json_object_new_object();
 
@@ -329,23 +279,8 @@ int main(int argc, char **argv) {
       case 'd':
         debug_level = parse_int("debug", optarg);
         break;
-      case 'a':
-        server->url_arg = true;
-        break;
-      case 'W':
-        server->writable = true;
-        break;
       case 'm':
         server->max_clients = parse_int("max-clients", optarg);
-        break;
-      case 'o':
-        server->once = true;
-        break;
-      case 'q':
-        server->exit_no_conn = true;
-        break;
-      case 'B':
-        browser = true;
         break;
       case 'p':
         info.port = parse_int("port", optarg);
@@ -373,55 +308,6 @@ int main(int argc, char **argv) {
       case 'w':
         server->cwd = strdup(optarg);
         break;
-      case 'I':
-        if (!strncmp(optarg, "~/", 2)) {
-          const char *home = getenv("HOME");
-          size_t index_len = strlen(home) + strlen(optarg);
-          server->index = malloc(index_len);
-          snprintf(server->index, index_len, "%s%s", home, optarg + 1);
-        } else {
-          server->index = strdup(optarg);
-        }
-        struct stat st;
-        if (stat(server->index, &st) == -1) {
-          fprintf(stderr, "Can not stat index.html: %s, error: %s\n", server->index, strerror(errno));
-          return -1;
-        }
-        if (S_ISDIR(st.st_mode)) {
-          fprintf(stderr, "Invalid index.html path: %s, is it a dir?\n", server->index);
-          return -1;
-        }
-        break;
-      case 'e':
-        if (!strncmp(optarg, "~/", 2)) {
-          const char *home = getenv("HOME");
-          server->Bell = malloc(strlen(home) + strlen(optarg) - 1);
-          sprintf(server->Bell, "%s%s", home, optarg + 1);
-        } else {
-          server->Bell = strdup(optarg);
-        }
-        struct stat bst;
-        if (stat(server->Bell, &bst) == -1) {
-          fprintf(stderr, "Can not stat Bell.mp3: %s, error: %s\n", server->Bell, strerror(errno));
-          return -1;
-        }
-        if (S_ISDIR(bst.st_mode)) {
-          fprintf(stderr, "Invalid Bell.mp3 path: %s, is it a dir?\n", server->Bell);
-          return -1;
-        }
-        break;
-      case 'b': {
-        char path[128];
-        strncpy(path, optarg, 128);
-        size_t len = strlen(path);
-        while (len && path[len - 1] == '/') path[--len] = 0;  // trim trailing /
-        if (!len) break;
-#define sc(f)                                  \
-  strncpy(path + len, endpoints.f, 128 - len); \
-  endpoints.f = strdup(path);
-        sc(ws) sc(index) sc(token) sc(parent) sc(Bell) sc(favicon) sc(content)
-#undef sc
-      } break;
 #if LWS_LIBRARY_VERSION_NUMBER >= 4000000
       case 'P': {
         int interval = parse_int("ping-interval", optarg);
@@ -432,31 +318,6 @@ int main(int argc, char **argv) {
         retry.secs_since_valid_ping = interval;
         retry.secs_since_valid_hangup = interval + 7;
       } break;
-#endif
-      case 'f': {
-        int serv_buf_size = parse_int("srv-buf-size", optarg);
-        if (serv_buf_size < 0) {
-          fprintf(stderr, "ttyd: invalid srv-buf-size: %s\n", optarg);
-          return -1;
-        }
-        info.pt_serv_buf_size = serv_buf_size;
-      } break;
-#if defined(LWS_OPENSSL_SUPPORT) || defined(LWS_WITH_TLS)
-      case 'S':
-        ssl = true;
-        break;
-      case 'C':
-        strncpy(cert_path, optarg, sizeof(cert_path) - 1);
-        cert_path[sizeof(cert_path) - 1] = '\0';
-        break;
-      case 'K':
-        strncpy(key_path, optarg, sizeof(key_path) - 1);
-        key_path[sizeof(key_path) - 1] = '\0';
-        break;
-      case 'A':
-        strncpy(ca_path, optarg, sizeof(ca_path) - 1);
-        ca_path[sizeof(ca_path) - 1] = '\0';
-        break;
 #endif
       case 'T':
         strncpy(server->terminal_type, optarg, sizeof(server->terminal_type) - 1);
@@ -507,21 +368,6 @@ int main(int argc, char **argv) {
   info.retry_and_idle_policy = &retry;
 #endif
 
-#if defined(LWS_OPENSSL_SUPPORT) || defined(LWS_WITH_TLS)
-  if (ssl) {
-    info.ssl_cert_filepath = cert_path;
-    info.ssl_private_key_filepath = key_path;
-#ifndef LWS_WITH_MBEDTLS
-    info.ssl_options_set = SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1;
-#endif
-    if (strlen(ca_path) > 0) {
-      info.ssl_ca_filepath = ca_path;
-      info.options |= LWS_SERVER_OPTION_REQUIRE_VALID_OPENSSL_CLIENT_CERT;
-    }
-    info.options |= LWS_SERVER_OPTION_ALLOW_NON_SSL_ON_SSL_PORT | LWS_SERVER_OPTION_REDIRECT_HTTP_TO_HTTPS;
-  }
-#endif
-
   lwsl_notice("ttyd %s (libwebsockets %s)\n", TTYD_VERSION, LWS_LIBRARY_VERSION);
   print_config();
 
@@ -543,12 +389,6 @@ int main(int argc, char **argv) {
   }
   int port = lws_get_vhost_listen_port(vhost);
   lwsl_notice(" Listening on port: %d\n", port);
-
-  if (browser) {
-    char url[30];
-    snprintf(url, sizeof(url), "%s://localhost:%d", ssl ? "https" : "http", port);
-    open_uri(url);
-  }
 
 #define sig_count 2
   int sig_nums[] = {SIGINT, SIGTERM};

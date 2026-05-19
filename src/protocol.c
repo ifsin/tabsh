@@ -344,7 +344,7 @@ static char** build_args(struct pss_tty* pss) {
   }
 
   int i, n = 0;
-  char** argv = xmalloc((server->argc + pss->argc + extra + 1) * sizeof(char*));
+  char** argv = xmalloc((server->argc + extra + 1) * sizeof(char*));
 
   for (i = 0; i < server->argc; i++) {
     argv[n++] = server->argv[i];
@@ -369,10 +369,6 @@ static char** build_args(struct pss_tty* pss) {
       sprintf(path, "%s\\init.bat", init_dir);
       argv[n++] = path;
     }
-  }
-
-  for (i = 0; i < pss->argc; i++) {
-    argv[n++] = pss->args[i];
   }
 
   argv[n] = NULL;
@@ -527,10 +523,6 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
 
   switch (reason) {
     case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION:
-      if (server->once && server->client_count > 0) {
-        lwsl_warn("refuse to serve WS client due to the --once option.\n");
-        return 1;
-      }
       if (server->max_clients > 0 && server->client_count == server->max_clients) {
         lwsl_warn("refuse to serve WS client due to the --max-clients option.\n");
         return 1;
@@ -553,16 +545,6 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
       pss->session = NULL;
       pss->session_id[0] = '\0';
       pss->notify = NULL;
-      if (server->url_arg) {
-        while (lws_hdr_copy_fragment(wsi, buf, sizeof(buf), WSI_TOKEN_HTTP_URI_ARGS, n++) > 0) {
-          if (strncmp(buf, "arg=", 4) == 0) {
-            pss->args = xrealloc(pss->args, (pss->argc + 1) * sizeof(char*));
-            pss->args[pss->argc] = strdup(&buf[4]);
-            pss->argc++;
-          }
-        }
-      }
-
       server->client_count++;
       favicon_pss_add(pss);
 
@@ -755,14 +737,14 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
       }
 
       switch (command) {
-        case INPUT:
-          if (!server->writable) break;
+        case INPUT: {
           int err = pty_write(pss->process, pty_buf_init(pss->buffer + 1, pss->len - 1));
           if (err) {
             lwsl_err("uv_write: %s (%s)\n", uv_err_name(err), uv_strerror(err));
             return -1;
           }
           break;
+        }
         case CLEAR:
           if (pss->session != NULL && pss->session->terminal != NULL)
             terminal_clear(pss->session->terminal);
@@ -858,9 +840,6 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
         free(pss->app_command);
         pss->app_command = NULL;
       }
-      for (int i = 0; i < pss->argc; i++) {
-        free(pss->args[i]);
-      }
       if (pss->process != NULL && process_running(pss->process)) {
         if (pss->session != NULL) {
 #ifndef _WIN32
@@ -894,19 +873,6 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
         }
       }
 
-      if ((server->once || server->exit_no_conn) && server->client_count == 0) {
-        lwsl_notice("exiting due to the --once/--exit-no-conn option.\n");
-
-        // stop accepting new ws connections
-        lws_cancel_service(context);
-
-        if (process_running(pss->process)) {
-          force_exit = true;
-          lwsl_notice("send ^C to force exit.\n");
-        } else {
-          exit(0);
-        }
-      }
       break;
 
     default:

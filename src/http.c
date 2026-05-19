@@ -89,57 +89,25 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       p = buffer + LWS_PRE;
       end = p + sizeof(buffer) - LWS_PRE;
 
-      if (strcmp(pss->path, endpoints.token) == 0) {
-        size_t n = snprintf(buf, sizeof(buf), "{\"token\": \"\"}");
+      if (strcmp(pss->path, endpoints.Bell) == 0) {
+        const char *content_type = "audio/mpeg";
+        char *output = (char *)malloc(beep_mp3_len + 1);
+        size_t output_len = beep_mp3_len;
         if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
             lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
-                                         (unsigned char *)"application/json;charset=utf-8", 30, &p, end) ||
-            lws_add_http_header_content_length(wsi, (unsigned long)n, &p, end) ||
+                                          (const unsigned char *)content_type, 10, &p, end))
+          return 1;
+
+        if (lws_add_http_header_content_length(wsi, (unsigned long)output_len, &p, end) ||
             lws_finalize_http_header(wsi, &p, end) ||
             lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
           return 1;
 
-        pss->buffer = pss->ptr = strdup(buf);
-        pss->len = n;
+        memcpy(output, beep_mp3, beep_mp3_len);
+        pss->buffer = pss->ptr = output;
+        pss->len = output_len;
         lws_callback_on_writable(wsi);
         break;
-      }
-
-      if (strcmp(pss->path, endpoints.Bell) == 0) {
-        const char *content_type = "audio/mpeg";
-        if (server->Bell != NULL) {
-          int n = lws_serve_http_file(wsi, server->Bell, content_type, NULL, 0);
-          if (n < 0 || (n > 0 && lws_http_transaction_completed(wsi))) return 1;
-        } else {
-          char *output = (char *)malloc(beep_mp3_len + 1);
-          size_t output_len = beep_mp3_len;
-          if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
-              lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
-                                            (const unsigned char *)content_type, 10, &p, end))
-            return 1;
-
-          if (lws_add_http_header_content_length(wsi, (unsigned long)output_len, &p, end) ||
-              lws_finalize_http_header(wsi, &p, end) ||
-              lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
-            return 1;
-
-          memcpy(output, beep_mp3, beep_mp3_len);
-          pss->buffer = pss->ptr = output;
-          pss->len = output_len;
-          lws_callback_on_writable(wsi);
-        }
-        break;
-      }
-
-      // redirects `/base-path` to `/base-path/`
-      if (strcmp(pss->path, endpoints.parent) == 0) {
-        if (lws_add_http_header_status(wsi, HTTP_STATUS_FOUND, &p, end) ||
-            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_LOCATION, (unsigned char *)endpoints.index,
-                                         (int)strlen(endpoints.index), &p, end) ||
-            lws_add_http_header_content_length(wsi, 0, &p, end) || lws_finalize_http_header(wsi, &p, end) ||
-            lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
-          return 1;
-        goto try_to_reuse;
       }
 
       if (strncmp(pss->path, endpoints.favicon, strlen(endpoints.favicon)) == 0) {
@@ -280,10 +248,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
       }
 
       const char *content_type = "text/html";
-      if (server->index != NULL) {
-        int n = lws_serve_http_file(wsi, server->index, content_type, NULL, 0);
-        if (n < 0 || (n > 0 && lws_http_transaction_completed(wsi))) return 1;
-      } else {
+      {
         // always serve decompressed so we can inject meta tags
         char *html = NULL;
         size_t html_len = 0;
@@ -400,17 +365,6 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
 
     case LWS_CALLBACK_HTTP_FILE_COMPLETION:
       goto try_to_reuse;
-#if (defined(LWS_OPENSSL_SUPPORT) || defined(LWS_WITH_TLS)) && !defined(LWS_WITH_MBEDTLS)
-    case LWS_CALLBACK_OPENSSL_PERFORM_CLIENT_CERT_VERIFICATION:
-      if (!len || (SSL_get_verify_result((SSL *)in) != X509_V_OK)) {
-        int err = X509_STORE_CTX_get_error((X509_STORE_CTX *)user);
-        int depth = X509_STORE_CTX_get_error_depth((X509_STORE_CTX *)user);
-        const char *msg = X509_verify_cert_error_string(err);
-        lwsl_err("client certificate verification error: %s (%d), depth: %d\n", msg, err, depth);
-        return 1;
-      }
-      break;
-#endif
     default:
       break;
   }

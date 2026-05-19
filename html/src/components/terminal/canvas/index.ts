@@ -60,9 +60,8 @@ export interface FlowControl {
     lowWater: number;
 }
 
-export interface XtermOptions {
+export interface TTYOptions {
     wsUrl: string;
-    tokenUrl: string;
     flowControl: FlowControl;
     clientOptions: ClientOptions;
     termOptions: {
@@ -609,11 +608,10 @@ function encodeKey(e: KeyboardEvent): string | null {
     return null;
 }
 
-export class Xterm {
+export class TTY {
     private textEncoder = new TextEncoder();
     private textDecoder = new TextDecoder();
     private socket?: WebSocket;
-    private token: string = '';
     private sessionId: string;
     private renderer?: CanvasRenderer;
     private parent?: HTMLElement;
@@ -638,27 +636,14 @@ export class Xterm {
         return id;
     }
 
-    constructor(private options: XtermOptions, private sendCb?: () => void) {
-        this.sessionId = Xterm.generateSessionId();
+    constructor(private options: TTYOptions, private sendCb?: () => void) {
+        this.sessionId = TTY.generateSessionId();
     }
 
     dispose() {
         try { this.socket?.close(); } catch { /* ignore */ }
         this.resizeObs?.disconnect();
         window.removeEventListener('beforeunload', this.onBeforeUnload);
-    }
-
-    @bind
-    public async refreshToken() {
-        try {
-            const resp = await fetch(this.options.tokenUrl);
-            if (resp.ok) {
-                const json = await resp.json();
-                this.token = json.token ?? '';
-            }
-        } catch (e) {
-            console.error(`[tabsh] fetch ${this.options.tokenUrl}: `, e);
-        }
     }
 
     @bind
@@ -974,7 +959,6 @@ export class Xterm {
         console.log('[tabsh] websocket connection opened');
         const { cols, rows } = this.renderer!;
         const msg = JSON.stringify({
-            AuthToken: this.token,
             columns: cols,
             rows,
             sessionId: this.sessionId,
@@ -990,7 +974,7 @@ export class Xterm {
     private onClose(e: CloseEvent) {
         console.log(`[tabsh] websocket closed code=${e.code}`);
         if (e.code !== 1000 && this.doReconnect) {
-            setTimeout(() => this.refreshToken().then(() => this.connect()), 500);
+            setTimeout(() => this.connect(), 500);
         } else if (this.closeOnDisconnect) {
             window.close();
         }

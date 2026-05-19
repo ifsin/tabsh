@@ -1,21 +1,20 @@
 import { Component, h } from 'preact';
-import { Xterm, XtermOptions } from './canvas';
+import { TTY, TTYOptions } from './canvas';
 
-interface Props extends XtermOptions {
+interface Props extends TTYOptions {
     id: string;
 }
 
 export class Terminal extends Component<Props> {
     private container!: HTMLElement;
-    private xterm: Xterm;
+    private xterm: TTY;
 
     constructor(props: Props) {
         super();
-        this.xterm = new Xterm(props);
+        this.xterm = new TTY(props);
     }
 
-    async componentDidMount() {
-        await this.xterm.refreshToken();
+    componentDidMount() {
         this.xterm.open(this.container);
         this.xterm.connect();
     }
