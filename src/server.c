@@ -12,7 +12,6 @@
 #include <sys/stat.h>
 
 #include "utils.h"
-#include "compat.h"
 
 #ifndef TTYD_VERSION
 #define TTYD_VERSION "unknown"

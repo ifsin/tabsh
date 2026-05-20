@@ -6,7 +6,6 @@
 
 #include "notify.h"
 #include "pty.h"
-#include "compat.h"
 
 #define PTY_RING_SIZE (256 * 1024)
 

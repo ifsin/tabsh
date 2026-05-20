@@ -16,6 +16,7 @@ int get_sig_name(int sig, char *buf, size_t len);
 // Get signal code from string like SIGHUP
 int get_sig(const char *sig_name);
 
+#define mkdir_p(path, mode) mkdir(path, mode)
 
 #ifdef _WIN32
 char *strsep(char **sp, char *sep);

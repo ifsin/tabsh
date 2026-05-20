@@ -7,7 +7,7 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
-#include "compat.h"
+#include "utils.h"
 
 #include "favicon.h"
 #include "server.h"
