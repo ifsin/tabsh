@@ -1,5 +1,6 @@
 #include <libwebsockets.h>
 #include <ctype.h>
+#include <json.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
@@ -7,6 +8,7 @@
 #include "html.h"
 #include "beep.h"
 #include "server.h"
+#include "config.h"
 #include "utils.h"
 
 static char *html_cache = NULL;
@@ -242,80 +244,112 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
         break;
       }
 
-      if (strncmp(pss->path, endpoints.index, strlen(endpoints.index)) != 0) {
-        lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
+      /* GET / → 302 redirect to /<first_app_id>/ */
+      if (strcmp(pss->path, "/") == 0 || strcmp(pss->path, "") == 0) {
+        struct app_entry *first = config_get_first_app();
+        char redirect_loc[128];
+        if (first && first->id[0]) {
+          snprintf(redirect_loc, sizeof(redirect_loc), "/%s/", first->id);
+        } else {
+          snprintf(redirect_loc, sizeof(redirect_loc), "/term/");
+        }
+        if (lws_add_http_header_status(wsi, HTTP_STATUS_FOUND, &p, end) ||
+            lws_add_http_header_by_name(wsi, (unsigned char *)"Location:",
+                                        (unsigned char *)redirect_loc, (int)strlen(redirect_loc), &p, end) ||
+            lws_add_http_header_content_length(wsi, 0, &p, end) ||
+            lws_finalize_http_header(wsi, &p, end) ||
+            lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0)
+          return 1;
         goto try_to_reuse;
       }
 
-      const char *content_type = "text/html";
+      /* GET /<app_id>/... → serve HTML with injected config */
       {
-        // always serve decompressed so we can inject meta tags
+        /* Extract app_id from first path segment */
+        const char *path_start = pss->path;
+        if (path_start[0] == '/') path_start++;
+        /* strip query string for app_id lookup */
+        const char *qs = strchr(path_start, '?');
+        const char *slash = strchr(path_start, '/');
+        size_t app_id_len = 0;
+        if (slash) {
+          app_id_len = (size_t)(slash - path_start);
+        } else if (qs) {
+          app_id_len = (size_t)(qs - path_start);
+        } else {
+          app_id_len = strlen(path_start);
+        }
+
+        if (app_id_len == 0) {
+          lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
+          goto try_to_reuse;
+        }
+
+        char app_id_buf[64] = {0};
+        if (app_id_len >= sizeof(app_id_buf)) app_id_len = sizeof(app_id_buf) - 1;
+        memcpy(app_id_buf, path_start, app_id_len);
+
+        struct app_entry *app = config_get_app(app_id_buf);
+        if (!app) {
+          lws_return_http_status(wsi, HTTP_STATUS_NOT_FOUND, NULL);
+          goto try_to_reuse;
+        }
+
+        /* Build injected config JSON */
+        struct app_theme resolved;
+        config_resolve_theme(app, &resolved);
+
+        struct json_object *theme_obj = json_object_new_object();
+        if (resolved.has_foreground) json_object_object_add(theme_obj, "foreground", json_object_new_string(resolved.foreground));
+        if (resolved.has_background) json_object_object_add(theme_obj, "background", json_object_new_string(resolved.background));
+        if (resolved.has_cursor)     json_object_object_add(theme_obj, "cursor",     json_object_new_string(resolved.cursor));
+        if (resolved.has_cursor_style) json_object_object_add(theme_obj, "cursor_style", json_object_new_string(resolved.cursor_style));
+        if (resolved.has_cursor_blink) json_object_object_add(theme_obj, "cursor_blink", json_object_new_boolean(resolved.cursor_blink));
+        if (resolved.has_font_size)  json_object_object_add(theme_obj, "font_size",  json_object_new_int(resolved.font_size));
+        if (resolved.has_font_family) json_object_object_add(theme_obj, "font_family", json_object_new_string(resolved.font_family));
+
+        struct json_object *app_obj = json_object_new_object();
+        json_object_object_add(app_obj, "id",   json_object_new_string(app->id));
+        json_object_object_add(app_obj, "name", json_object_new_string(app->name));
+
+        struct json_object *cfg_obj = json_object_new_object();
+        json_object_object_add(cfg_obj, "theme", theme_obj);
+        json_object_object_add(cfg_obj, "app",   app_obj);
+
+        const char *cfg_json = json_object_to_json_string(cfg_obj);
+        /* Build inject block: background style + config script */
+        char inject_block[8192];
+        int inject_len = snprintf(inject_block, sizeof(inject_block),
+          "<style>body{background:%s}</style>"
+          "<script>window.__TABSH_CONFIG__=%s;</script>",
+          resolved.has_background ? resolved.background : "#1E1E1E",
+          cfg_json);
+        json_object_put(cfg_obj);
+
+        /* Decompress HTML */
         char *html = NULL;
         size_t html_len = 0;
         if (!uncompress_html(&html, &html_len)) return 1;
 
-        // extract cwd and app from request path for meta injection
-        char meta_cwd[512] = {0};
-        char meta_app[512] = {0};
-        char *dir_p = strstr(pss->path, "/dir");
-        if (dir_p && dir_p[4] == '/') {
-          const char *s = dir_p + 4;
-          const char *q = strchr(s, '?');
-          size_t n = q ? (size_t)(q - s) : strlen(s);
-          if (n < sizeof(meta_cwd)) { memcpy(meta_cwd, s, n); url_decode(meta_cwd); }
-        }
-        char *app_p = strstr(pss->path, "app=");
-        if (app_p) {
-          const char *s = app_p + 4;
-          const char *q = strchr(s, '&');
-          size_t n = q ? (size_t)(q - s) : strlen(s);
-          if (n < sizeof(meta_app)) { memcpy(meta_app, s, n); url_decode(meta_app); }
-        }
-
-        // build meta block
-        char meta_block[1024];
-        int meta_len = 0;
-        if (meta_cwd[0] || meta_app[0]) {
-          char desc[768];
-          if (meta_app[0] && meta_cwd[0])
-            snprintf(desc, sizeof(desc), "Terminal: %s \xe2\x80\x94 %s", meta_app, meta_cwd);
-          else if (meta_app[0])
-            snprintf(desc, sizeof(desc), "Terminal: %s", meta_app);
-          else
-            snprintf(desc, sizeof(desc), "Terminal: %s", meta_cwd);
-
-          char ogtitle[512];
-          if (meta_app[0])
-            snprintf(ogtitle, sizeof(ogtitle), "ttyd \xe2\x80\x94 %s", meta_app);
-          else
-            snprintf(ogtitle, sizeof(ogtitle), "ttyd \xe2\x80\x94 %s", meta_cwd);
-
-          meta_len = snprintf(meta_block, sizeof(meta_block),
-            "<meta name=\"description\" content=\"%s\">"
-            "<meta property=\"og:title\" content=\"%s\">"
-            "<meta property=\"og:description\" content=\"%s\">",
-            desc, ogtitle, desc);
-        }
-
-        // inject before </head>
+        /* Inject before </head> */
         char *inject_buf = NULL;
-        size_t inject_len = 0;
+        size_t out_len = 0;
         const char *head_close = memmem(html, html_len, "</head>", 7);
-        if (head_close && meta_len > 0) {
-          inject_len = html_len + (size_t)meta_len;
-          inject_buf = xmalloc(inject_len);
+        if (head_close && inject_len > 0) {
+          out_len = html_len + (size_t)inject_len;
+          inject_buf = xmalloc(out_len);
           size_t prefix = (size_t)(head_close - html);
           memcpy(inject_buf, html, prefix);
-          memcpy(inject_buf + prefix, meta_block, (size_t)meta_len);
-          memcpy(inject_buf + prefix + meta_len, head_close, html_len - prefix);
+          memcpy(inject_buf + prefix, inject_block, (size_t)inject_len);
+          memcpy(inject_buf + prefix + inject_len, head_close, html_len - prefix);
         }
 
         char *output = inject_buf ? inject_buf : html;
-        size_t output_len = inject_buf ? inject_len : html_len;
+        size_t output_len = inject_buf ? out_len : html_len;
 
+        const char *content_type = "text/html";
         if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end) ||
-            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE, (const unsigned char *)content_type, 9, &p,
-                                         end) ||
+            lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE, (const unsigned char *)content_type, 9, &p, end) ||
             lws_add_http_header_content_length(wsi, (unsigned long)output_len, &p, end) ||
             lws_finalize_http_header(wsi, &p, end) ||
             lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS) < 0) {
@@ -323,7 +357,7 @@ int callback_http(struct lws *wsi, enum lws_callback_reasons reason, void *user,
           return 1;
         }
 
-        pss->buffer = pss->ptr = inject_buf ? inject_buf : html;
+        pss->buffer = pss->ptr = output;
         pss->len = output_len;
         lws_callback_on_writable(wsi);
       }

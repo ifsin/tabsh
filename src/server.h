@@ -6,6 +6,7 @@
 
 #include "notify.h"
 #include "pty.h"
+#include "config.h"
 
 #define PTY_RING_SIZE (256 * 1024)
 
@@ -21,14 +22,8 @@
 // server → client
 #define CELL_DIFF    '0'
 #define SB_PUSH      '1'
-#define WINDOW_TITLE '2'
-#define PREFERENCES  '3'
-#define REATTACHED   '4'
-#define APP_COMMAND  '5'
-#define APP_FAVICON  '6'
-#define MOUSE_MODE   '7'
-#define ALT_SCREEN   '8'
-#define CURSOR_BLINK '9'
+#define REATTACHED   '2'
+#define STATE        '3'
 
 // url paths
 struct endpoints {
@@ -72,7 +67,6 @@ typedef struct session {
 
 struct pss_tty {
   bool initialized;
-  int initial_cmd_index;
   char address[50];
   char path[128];
   char session_id[SESSION_ID_LEN];
@@ -91,12 +85,7 @@ struct pss_tty {
   bool reattached;
 
   char current_app[APP_COMMAND_LEN];
-  char pending_app[APP_COMMAND_LEN];
-  bool pending_app_send;
-
   char current_favicon_formula[256];
-  char pending_favicon[256];
-  bool pending_favicon_send;
 
   notify_ctx_t *notify;
 
@@ -104,22 +93,16 @@ struct pss_tty {
 
   bool pending_frame;
 
-  bool pending_altscreen_send;
-  uint8_t pending_altscreen_value;
-
-  bool pending_mouse_mode_send;
-  uint8_t pending_mouse_mode_value;
-
-  bool pending_cursor_blink_send;
-  bool pending_cursor_blink_value;
+  struct json_object *pending_state;  /* accumulated STATE fields, NULL = clean */
+  struct app_entry *app;              /* which app this session is running */
 };
 
 struct server {
   int client_count;        // client count
-  char *prefs_json;        // client preferences
-  char *command;           // full command line
-  char **argv;             // command with arguments
-  int argc;                // command + arguments count
+  char *prefs_json;        // client preferences (legacy)
+  char *command;           // full command line (legacy)
+  char **argv;             // command with arguments (legacy)
+  int argc;                // command + arguments count (legacy)
   char *cwd;               // working directory
   int sig_code;            // close signal
   char sig_name[20];       // human readable signal string
@@ -128,6 +111,8 @@ struct server {
 
   uv_loop_t *loop;         // the libuv event loop
   session_t *sessions;     // linked list of detached sessions
+
+  char config_path[512];   // --config path if given
 
   char pty_ring[PTY_RING_SIZE];
   size_t pty_ring_head;

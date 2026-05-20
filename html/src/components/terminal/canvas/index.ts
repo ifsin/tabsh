@@ -4,16 +4,10 @@ import { bind } from 'decko';
 
 // Commands server → client
 const enum S2C {
-    CELL_DIFF    = '0',
-    SB_PUSH      = '1',
-    WINDOW_TITLE = '2',
-    PREFERENCES  = '3',
-    REATTACHED   = '4',
-    APP_COMMAND  = '5',
-    APP_FAVICON  = '6',
-    MOUSE_MODE   = '7',
-    ALT_SCREEN   = '8',
-    CURSOR_BLINK = '9',
+    CELL_DIFF  = '0',
+    SB_PUSH    = '1',
+    REATTACHED = '2',
+    STATE      = '3',
 }
 
 // Commands client → server
@@ -70,9 +64,10 @@ export interface TTYOptions {
         theme?: { foreground?: string; background?: string; cursor?: string };
     };
     cwd?: string;
-    app?: string;
-    onAppCommand?: (cmd: string) => void;
-    onAppFavicon?: (url: string) => void;
+    appId?: string;
+    cmd?: string;
+    onCmd?: (cmd: string) => void;
+    onFavicon?: (url: string) => void;
 }
 
 function blankCell(fg: [number, number, number], bg: [number, number, number]): Cell {
@@ -963,7 +958,8 @@ export class TTY {
             rows,
             sessionId: this.sessionId,
             ...(this.options.cwd ? { cwd: this.options.cwd } : {}),
-            ...(this.options.app ? { app: this.options.app } : {}),
+            ...(this.options.appId ? { appId: this.options.appId } : {}),
+            ...(this.options.cmd ? { cmd: this.options.cmd } : {}),
         });
         this.socket?.send(this.textEncoder.encode(msg));
         this.opened = true;
@@ -993,59 +989,34 @@ export class TTY {
                 this.renderer?.applySbPush(data);
                 this.scheduleA11yUpdate();
                 break;
-            case S2C.WINDOW_TITLE: {
-                const title = this.textDecoder.decode(data);
-                if (!this.titleFixed) {
-                    this.currentTitle = title;
-                    document.title = title;
-                }
+            case S2C.REATTACHED:
+                // server follows with STATE containing mouseMode/altScreen/cursorBlink
                 break;
-            }
-            case S2C.PREFERENCES:
+            case S2C.STATE: {
                 try {
-                    const prefs = JSON.parse(this.textDecoder.decode(data));
-                    this.applyPrefs(prefs);
+                    const s = JSON.parse(this.textDecoder.decode(data));
+                    if ('mouseMode' in s) this.mouseMode = s.mouseMode;
+                    if ('altScreen' in s) this.renderer?.setAltScreen(s.altScreen);
+                    if ('cursorBlink' in s) this.renderer?.setCursorBlink(s.cursorBlink);
+                    if ('title' in s) {
+                        if (!this.titleFixed) {
+                            this.currentTitle = s.title;
+                            document.title = s.title;
+                        }
+                    }
+                    if ('cmd' in s) this.options.onCmd?.(s.cmd);
+                    if ('favicon' in s) this.options.onFavicon?.(s.favicon);
+                    if ('homeDir' in s) {
+                        if (this.options.clientOptions) this.options.clientOptions.homeDir = s.homeDir;
+                    }
                 } catch { /* ignore */ }
                 break;
-            case S2C.REATTACHED:
-                // server follows with scrollback replay + MOUSE_MODE + ALT_SCREEN + full repaint
-                break;
-            case S2C.MOUSE_MODE:
-                this.mouseMode = new Uint8Array(data)[0] ?? 0;
-                break;
-            case S2C.ALT_SCREEN:
-                this.renderer?.setAltScreen((new Uint8Array(data)[0] ?? 0) === 1);
-                break;
-            case S2C.CURSOR_BLINK: {
-                const enabled = (new Uint8Array(data)[0] ?? 1) === 1;
-                this.renderer?.setCursorBlink(enabled);
-                break;
             }
-            case S2C.APP_COMMAND:
-                this.options.onAppCommand?.(this.textDecoder.decode(data));
-                break;
-            case S2C.APP_FAVICON:
-                this.options.onAppFavicon?.(this.textDecoder.decode(data));
-                break;
             default:
                 console.warn(`[tabsh] unknown command: ${cmd}`);
         }
     }
 
-    private applyPrefs(prefs: ClientOptions) {
-        if (prefs.titleFixed) {
-            this.titleFixed = prefs.titleFixed;
-            document.title = prefs.titleFixed;
-        }
-        if (prefs.disableLeaveAlert) {
-            window.removeEventListener('beforeunload', this.onBeforeUnload);
-        }
-        if (prefs.closeOnDisconnect) {
-            this.closeOnDisconnect = true;
-            this.reconnect = false;
-            this.doReconnect = false;
-        }
-    }
 
     @bind
     public Bell() {

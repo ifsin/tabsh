@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 
 #include "utils.h"
+#include "config.h"
 
 #ifndef TTYD_VERSION
 #define TTYD_VERSION "unknown"
@@ -63,10 +64,11 @@ static const struct option options[] = {{"port", required_argument, NULL, 'p'},
                                         {"client-option", required_argument, NULL, 't'},
                                         {"max-clients", required_argument, NULL, 'm'},
                                         {"debug", required_argument, NULL, 'd'},
+                                        {"config", required_argument, NULL, 'C'},
                                         {"version", no_argument, NULL, 'v'},
                                         {"help", no_argument, NULL, 'h'},
                                         {NULL, 0, 0, 0}};
-static const char *opt_string = "p:u:g:s:w:P:t:T:m:d:vh";
+static const char *opt_string = "p:u:g:s:w:P:t:T:m:d:C:vh";
 
 static void print_help() {
   // clang-format off
@@ -98,7 +100,11 @@ static void print_help() {
 
 static void print_config() {
   lwsl_notice("tty configuration:\n");
-  lwsl_notice("  start command: %s\n", server->command);
+  if (g_config && g_config->app_count > 0) {
+    lwsl_notice("  apps: %d\n", g_config->app_count);
+  } else if (server->command != NULL) {
+    lwsl_notice("  start command: %s\n", server->command);
+  }
   lwsl_notice("  close signal: %s (%d)\n", server->sig_name, server->sig_code);
   lwsl_notice("  terminal type: %s\n", server->terminal_type);
   if (server->max_clients > 0) lwsl_notice("  max clients: %d\n", server->max_clients);
@@ -116,6 +122,11 @@ static struct server *server_new(int argc, char **argv, int start) {
   ts->sig_code = SIGHUP;
   snprintf(ts->terminal_type, sizeof(ts->terminal_type), "%s", "xterm-256color");
   get_sig_name(ts->sig_code, ts->sig_name, sizeof(ts->sig_name));
+
+  /* Always init the loop — needed for UV even when command comes from config */
+  ts->loop = xmalloc(sizeof *ts->loop);
+  uv_loop_init(ts->loop);
+
   if (start == argc) return ts;
 
   int cmd_argc = argc - start;
@@ -142,24 +153,22 @@ static struct server *server_new(int argc, char **argv, int start) {
   }
   *ptr = '\0';  // null terminator
 
-  ts->loop = xmalloc(sizeof *ts->loop);
-  uv_loop_init(ts->loop);
-
   return ts;
 }
 
 static void server_free(struct server *ts) {
   if (ts == NULL) return;
   if (ts->cwd != NULL) free(ts->cwd);
-  free(ts->command);
-  free(ts->prefs_json);
+  if (ts->command != NULL) free(ts->command);
+  if (ts->prefs_json != NULL) free(ts->prefs_json);
 
-  char **p = ts->argv;
-  for (; *p; p++) free(*p);
-  free(ts->argv);
+  if (ts->argv != NULL) {
+    char **p = ts->argv;
+    for (; *p; p++) free(*p);
+    free(ts->argv);
+  }
 
   uv_loop_close(ts->loop);
-
   free(ts->loop);
   free(ts);
 }
@@ -236,12 +245,11 @@ static int calc_command_start(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-  if (argc == 1) {
-    print_help();
-    return 0;
-  }
+  /* With no args, try to start from config file before showing help */
+  bool no_args = (argc == 1);
   int start = calc_command_start(argc, argv);
   server = server_new(argc, argv, start);
+  memset(server->config_path, 0, sizeof(server->config_path));
 
   struct lws_context_creation_info info;
   memset(&info, 0, sizeof(info));
@@ -322,6 +330,9 @@ int main(int argc, char **argv) {
         strncpy(server->terminal_type, optarg, sizeof(server->terminal_type) - 1);
         server->terminal_type[sizeof(server->terminal_type) - 1] = '\0';
         break;
+      case 'C':
+        strncpy(server->config_path, optarg, sizeof(server->config_path) - 1);
+        break;
       case '?':
         break;
       case 't':
@@ -350,9 +361,22 @@ int main(int argc, char **argv) {
   server->prefs_json = strdup(json_object_to_json_string(client_prefs));
   json_object_put(client_prefs);
 
-  if (server->command == NULL || strlen(server->command) == 0) {
-    fprintf(stderr, "ttyd: missing start command\n");
+  /* Load config file */
+  if (config_load(server->config_path[0] ? server->config_path : NULL) != 0) {
+    fprintf(stderr, "ttyd: failed to load config\n");
     return -1;
+  }
+
+  /* Determine command source */
+  if (g_config && g_config->app_count > 0) {
+    /* config has apps — good */
+  } else if (start < argc) {
+    /* fallback to legacy CLI command */
+    config_set_legacy((const char **)&argv[start], argc - start);
+  } else {
+    if (no_args) print_help();
+    else fprintf(stderr, "ttyd: missing start command (no config file and no command given)\n");
+    return no_args ? 0 : -1;
   }
 
   lws_set_log_level(debug_level, NULL);

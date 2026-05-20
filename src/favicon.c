@@ -1,3 +1,4 @@
+#include <json.h>
 #include <libwebsockets.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -398,11 +399,12 @@ static void favicon_fetch_done(uv_work_t *req, int status) {
   favicon_work_t *w = (favicon_work_t *)req;
   if (w->success) {
     if (favicon_pss_check(w->pss) && w->pss->wsi != NULL) {
-      snprintf(w->pss->pending_favicon, sizeof(w->pss->pending_favicon),
-               "%s%s.png", endpoints.favicon, w->formula);
-      w->pss->pending_favicon_send = true;
+      char favicon_url[512];
+      snprintf(favicon_url, sizeof(favicon_url), "%s%s.png", endpoints.favicon, w->formula);
+      lwsl_notice("[favicon] %s -> %s\n", w->formula, favicon_url);
+      if (!w->pss->pending_state) w->pss->pending_state = json_object_new_object();
+      json_object_object_add(w->pss->pending_state, "favicon", json_object_new_string(favicon_url));
       lws_callback_on_writable(w->pss->wsi);
-      lwsl_notice("[favicon] %s -> %s\n", w->formula, w->pss->pending_favicon);
     }
   } else {
     lwsl_notice("[favicon] %s: fetch failed, caching as none\n", w->formula);

@@ -39,7 +39,7 @@ else()
     set(PTY_BACKEND src/pty_unix.c)
 endif()
 
-set(SOURCE_FILES src/utils.c src/pty_common.c ${PTY_BACKEND} src/session.c src/favicon.c src/notify.c src/protocol.c src/http.c src/server.c src/terminal.c)
+set(SOURCE_FILES src/utils.c src/pty_common.c ${PTY_BACKEND} src/session.c src/favicon.c src/notify.c src/protocol.c src/http.c src/server.c src/terminal.c src/config.c)
 
 # --- vendored libvterm (built as a static library) ---
 file(GLOB LIBVTERM_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libvterm/src/*.c")

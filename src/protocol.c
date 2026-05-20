@@ -21,8 +21,22 @@
 #include "terminal.h"
 #include "utils.h"
 
-// initial message list
-static char initial_cmds[] = {PREFERENCES};
+/* STATE helper functions */
+static void state_set_str(struct pss_tty *pss, const char *key, const char *val) {
+    if (!pss->pending_state) pss->pending_state = json_object_new_object();
+    json_object_object_add(pss->pending_state, key, json_object_new_string(val));
+    lws_callback_on_writable(pss->wsi);
+}
+static void state_set_int(struct pss_tty *pss, const char *key, int val) {
+    if (!pss->pending_state) pss->pending_state = json_object_new_object();
+    json_object_object_add(pss->pending_state, key, json_object_new_int(val));
+    lws_callback_on_writable(pss->wsi);
+}
+static void state_set_bool(struct pss_tty *pss, const char *key, bool val) {
+    if (!pss->pending_state) pss->pending_state = json_object_new_object();
+    json_object_object_add(pss->pending_state, key, json_object_new_boolean(val));
+    lws_callback_on_writable(pss->wsi);
+}
 
 #include "favicon.h"
 
@@ -144,22 +158,6 @@ static void reattach_sigwinch_cb(uv_timer_t* timer) {
   uv_close((uv_handle_t*)timer, (uv_close_cb)free);
 }
 
-static int send_initial_message(struct lws* wsi, int index) {
-  unsigned char message[LWS_PRE + 1 + 4096];
-  unsigned char* p = &message[LWS_PRE];
-  int n = 0;
-
-  char cmd = initial_cmds[index];
-  switch (cmd) {
-    case PREFERENCES:
-      n = snprintf((char*)p, 1 + 4096, "%c%s", cmd, server->prefs_json);
-      break;
-    default:
-      break;
-  }
-
-  return lws_write(wsi, p, (size_t)n, LWS_WRITE_BINARY);
-}
 
 static json_object* parse_window_size(const char* buf, size_t len, uint16_t* cols, uint16_t* rows) {
   json_tokener* tok = json_tokener_new();
@@ -210,17 +208,12 @@ static void check_foreground_process(struct pss_tty* pss) {
   if ((pss->session != NULL && fgpid == pss->session->root_pid) || command_is_shell(raw_argv)) {
     if (pss->current_app[0] != '\0') {
       pss->current_app[0] = '\0';
-      pss->pending_app[0] = '\0';
-      pss->pending_app_send = true;
-      lws_callback_on_writable(pss->wsi);
+      state_set_str(pss, "cmd", "");
     }
   } else if (strcmp(quoted_argv, pss->current_app) != 0) {
     strncpy(pss->current_app, quoted_argv, sizeof(pss->current_app) - 1);
     pss->current_app[sizeof(pss->current_app) - 1] = '\0';
-    strncpy(pss->pending_app, quoted_argv, sizeof(pss->pending_app) - 1);
-    pss->pending_app[sizeof(pss->pending_app) - 1] = '\0';
-    pss->pending_app_send = true;
-    lws_callback_on_writable(pss->wsi);
+    state_set_str(pss, "cmd", quoted_argv);
   }
 
   char formula[256] = {0};
@@ -229,9 +222,7 @@ static void check_foreground_process(struct pss_tty* pss) {
   if (!is_brew) {
     if (pss->current_favicon_formula[0] != '\0') {
       pss->current_favicon_formula[0] = '\0';
-      pss->pending_favicon[0] = '\0';
-      pss->pending_favicon_send = true;
-      lws_callback_on_writable(pss->wsi);
+      state_set_str(pss, "favicon", "");
     }
   } else if (strcmp(formula, pss->current_favicon_formula) != 0) {
     strncpy(pss->current_favicon_formula, formula, sizeof(pss->current_favicon_formula) - 1);
@@ -244,9 +235,9 @@ static void check_foreground_process(struct pss_tty* pss) {
     if (access(none_path, F_OK) == 0) {
       // cached none
     } else if (access(cache_path, F_OK) == 0) {
-      snprintf(pss->pending_favicon, sizeof(pss->pending_favicon), "%s%s.png", endpoints.favicon, formula);
-      pss->pending_favicon_send = true;
-      lws_callback_on_writable(pss->wsi);
+      char favicon_url[512];
+      snprintf(favicon_url, sizeof(favicon_url), "%s%s.png", endpoints.favicon, formula);
+      state_set_str(pss, "favicon", favicon_url);
     } else {
       favicon_queue_fetch(pss, formula, cache_path, none_path);
     }
@@ -330,7 +321,10 @@ done:
 }
 
 static char** build_args(struct pss_tty* pss) {
-  const char* shell = detect_shell(server->argv[0]);
+  struct app_entry *app = pss->app ? pss->app : config_get_first_app();
+  if (!app) return NULL;
+
+  const char* shell = detect_shell(app->command);
   int extra = 0;
 
   if (shell != NULL && pss->notify != NULL) {
@@ -343,11 +337,12 @@ static char** build_args(struct pss_tty* pss) {
     }
   }
 
-  int i, n = 0;
-  char** argv = xmalloc((server->argc + extra + 1) * sizeof(char*));
+  int n = 0;
+  char** argv = xmalloc((app->argc + 1 + extra + 1) * sizeof(char*));
 
-  for (i = 0; i < server->argc; i++) {
-    argv[n++] = server->argv[i];
+  argv[n++] = app->command;
+  for (int i = 0; i < app->argc; i++) {
+    argv[n++] = app->args[i];
   }
 
   if (extra > 0) {
@@ -377,6 +372,7 @@ static char** build_args(struct pss_tty* pss) {
 }
 
 static char** build_env(struct pss_tty* pss) {
+  struct app_entry *app = pss->app ? pss->app : config_get_first_app();
   int i = 0, n = 3;
   char** envp = xmalloc(n * sizeof(char*));
 
@@ -412,7 +408,8 @@ static char** build_env(struct pss_tty* pss) {
       i++;
     }
 
-    const char* shell = detect_shell(server->argv[0]);
+    const char* app_cmd = app ? app->command : (server->argv ? server->argv[0] : NULL);
+    const char* shell = app_cmd ? detect_shell(app_cmd) : NULL;
     if (shell != NULL) {
       if (strcmp(shell, "zsh") == 0) {
         const char* orig_zdotdir = getenv("ZDOTDIR");
@@ -448,6 +445,18 @@ static char** build_env(struct pss_tty* pss) {
   }
 #endif
 
+  /* Merge app-specific env vars */
+  if (app && app->envc > 0) {
+    for (int j = 0; j < app->envc; j++) {
+      size_t klen = strlen(app->env_keys[j]);
+      size_t vlen = strlen(app->env_vals[j]);
+      envp = xrealloc(envp, (++n) * sizeof(char*));
+      envp[i] = xmalloc(klen + vlen + 2);
+      snprintf(envp[i], klen + vlen + 2, "%s=%s", app->env_keys[j], app->env_vals[j]);
+      i++;
+    }
+  }
+
   envp[i] = NULL;
 
   return envp;
@@ -463,7 +472,8 @@ static bool spawn_process(struct pss_tty* pss, const char* session_id, uint16_t 
 #ifndef _WIN32
   session->notify = pss->notify;
 #endif
-  const char* cwd = pss->cwd ? pss->cwd : server->cwd;
+  const char* app_cwd = (pss->app && pss->app->cwd[0]) ? pss->app->cwd : NULL;
+  const char* cwd = pss->cwd ? pss->cwd : (app_cwd ? app_cwd : server->cwd);
   if (cwd != NULL) process->cwd = strdup(cwd);
   if (columns > 0) process->columns = columns;
   if (rows > 0) process->rows = rows;
@@ -498,6 +508,7 @@ static bool spawn_process(struct pss_tty* pss, const char* session_id, uint16_t 
     free(input);
     if (err) lwsl_err("write app command: %s (%s)\n", uv_err_name(err), uv_strerror(err));
   }
+  pty_resume(process);
   lws_callback_on_writable(pss->wsi);
 
   return true;
@@ -538,102 +549,69 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
       break;
 
     case LWS_CALLBACK_ESTABLISHED:
-      pss->initialized = false;
+      pss->initialized = true;
       pss->intentional_close = false;
       pss->wsi = wsi;
       pss->lws_close_status = LWS_CLOSE_STATUS_NOSTATUS;
       pss->session = NULL;
       pss->session_id[0] = '\0';
       pss->notify = NULL;
+      pss->pending_state = NULL;
+      pss->app = NULL;
       server->client_count++;
       favicon_pss_add(pss);
 
       lws_get_peer_simple(lws_get_network_wsi(wsi), pss->address, sizeof(pss->address));
       lwsl_notice("WS   %s - %s, clients: %d\n", pss->path, pss->address, server->client_count);
+
+      /* Send homeDir via STATE */
+      {
+        const char *home = getenv("HOME");
+        if (home) state_set_str(pss, "homeDir", home);
+      }
       break;
 
     case LWS_CALLBACK_SERVER_WRITEABLE:
       /* libwebsockets requires exactly one lws_write per LWS_CALLBACK_SERVER_WRITEABLE
        * invocation. Every path below must write at most one message then break.
        * Use lws_callback_on_writable to schedule subsequent sends. */
-      if (!pss->initialized) {
-        if (pss->initial_cmd_index == sizeof(initial_cmds)) {
-          pss->initialized = true;
-          pty_resume(pss->process);
-          if (pss->reattached && pss->process != NULL) {
-            pss->reattached = false;
-            /* Queue state re-sends for subsequent callbacks, then send REATTACHED now. */
-            if (pss->session && pss->session->terminal) {
-              pss->pending_mouse_mode_send = true;
-              pss->pending_mouse_mode_value = pss->session->terminal->mouse_mode;
-              pss->pending_altscreen_send = true;
-              pss->pending_altscreen_value = pss->session->terminal->altscreen_active;
-              pss->pending_cursor_blink_send = true;
-              pss->pending_cursor_blink_value = pss->session->terminal->cursor_blink_enabled;
-            }
-            uv_timer_t* t = xmalloc(sizeof(uv_timer_t));
-            uv_timer_init(server->loop, t);
-            t->data = pss->process;
-            uv_timer_start(t, reattach_sigwinch_cb, 100, 0);
-            unsigned char reattach_msg[LWS_PRE + 1];
-            reattach_msg[LWS_PRE] = REATTACHED;
-            lws_write(wsi, &reattach_msg[LWS_PRE], 1, LWS_WRITE_BINARY);
-            lws_callback_on_writable(wsi);
-          }
-          break;
-        }
-        if (send_initial_message(wsi, pss->initial_cmd_index) < 0) {
-          lwsl_err("failed to send initial message, index: %d\n", pss->initial_cmd_index);
-          lws_close_reason(wsi, LWS_CLOSE_STATUS_UNEXPECTED_CONDITION, NULL, 0);
-          return -1;
-        }
-        pss->initial_cmd_index++;
-        lws_callback_on_writable(wsi);
-        break;
-      }
 
       if (pss->lws_close_status > LWS_CLOSE_STATUS_NOSTATUS) {
         lws_close_reason(wsi, pss->lws_close_status, NULL, 0);
         return 1;
       }
 
-      if (pss->pending_altscreen_send) {
-        pss->pending_altscreen_send = false;
-        unsigned char as[LWS_PRE + 2];
-        as[LWS_PRE] = ALT_SCREEN;
-        as[LWS_PRE + 1] = pss->pending_altscreen_value;
-        lws_write(wsi, &as[LWS_PRE], 2, LWS_WRITE_BINARY);
-        lws_callback_on_writable(pss->wsi);
-        break;
-      }
-
-#ifndef _WIN32
-      if (pss->pending_app_send) {
-        pss->pending_app_send = false;
-        size_t app_len = strlen(pss->pending_app);
-        unsigned char* msg = xmalloc(LWS_PRE + 1 + app_len);
-        unsigned char* p = msg + LWS_PRE;
-        p[0] = APP_COMMAND;
-        memcpy(p + 1, pss->pending_app, app_len);
-        lws_write(wsi, p, 1 + app_len, LWS_WRITE_BINARY);
-        free(msg);
+      if (pss->reattached && pss->process != NULL) {
+        pss->reattached = false;
+        if (pss->session && pss->session->terminal) {
+          state_set_int(pss, "mouseMode", pss->session->terminal->mouse_mode);
+          state_set_bool(pss, "altScreen", pss->session->terminal->altscreen_active != 0);
+          state_set_bool(pss, "cursorBlink", pss->session->terminal->cursor_blink_enabled);
+        }
+        uv_timer_t* t = xmalloc(sizeof(uv_timer_t));
+        uv_timer_init(server->loop, t);
+        t->data = pss->process;
+        uv_timer_start(t, reattach_sigwinch_cb, 100, 0);
+        unsigned char reattach_msg[LWS_PRE + 1];
+        reattach_msg[LWS_PRE] = REATTACHED;
+        lws_write(wsi, &reattach_msg[LWS_PRE], 1, LWS_WRITE_BINARY);
         lws_callback_on_writable(wsi);
         break;
       }
 
-      if (pss->pending_favicon_send) {
-        pss->pending_favicon_send = false;
-        size_t flen = strlen(pss->pending_favicon);
-        unsigned char* msg = xmalloc(LWS_PRE + 1 + flen);
-        unsigned char* p = msg + LWS_PRE;
-        p[0] = APP_FAVICON;
-        memcpy(p + 1, pss->pending_favicon, flen);
-        lws_write(wsi, p, 1 + flen, LWS_WRITE_BINARY);
+      if (pss->pending_state) {
+        const char *s = json_object_to_json_string(pss->pending_state);
+        size_t slen = strlen(s);
+        unsigned char *msg = xmalloc(LWS_PRE + 1 + slen);
+        msg[LWS_PRE] = STATE;
+        memcpy(msg + LWS_PRE + 1, s, slen);
+        lws_write(wsi, msg + LWS_PRE, 1 + slen, LWS_WRITE_BINARY);
         free(msg);
+        json_object_put(pss->pending_state);
+        pss->pending_state = NULL;
         lws_callback_on_writable(wsi);
         break;
       }
-#endif
 
       if (pss->session != NULL && pss->session->terminal != NULL) {
         /* Drain one scrollback line per callback — history before refresh. */
@@ -658,61 +636,26 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
       }
 
       if (pss->session != NULL && pss->session->terminal != NULL) {
-        /* Collect any new terminal state changes into pending fields. */
-        if (!pss->pending_mouse_mode_send) {
-          uint8_t mode = 0;
-          if (terminal_take_mouse_mode_change(pss->session->terminal, &mode)) {
-            pss->pending_mouse_mode_send = true;
-            pss->pending_mouse_mode_value = mode;
-          }
+        /* Collect any new terminal state changes into pending_state */
+        uint8_t mode = 0;
+        if (terminal_take_mouse_mode_change(pss->session->terminal, &mode)) {
+          state_set_int(pss, "mouseMode", mode);
         }
-        if (!pss->pending_cursor_blink_send) {
-          bool blink = false;
-          if (terminal_take_cursor_blink_change(pss->session->terminal, &blink)) {
-            pss->pending_cursor_blink_send = true;
-            pss->pending_cursor_blink_value = blink;
-          }
+        bool blink = false;
+        if (terminal_take_cursor_blink_change(pss->session->terminal, &blink)) {
+          state_set_bool(pss, "cursorBlink", blink);
         }
-      }
-
-      if (pss->pending_mouse_mode_send) {
-        pss->pending_mouse_mode_send = false;
-        unsigned char buf2[LWS_PRE + 2];
-        buf2[LWS_PRE] = MOUSE_MODE;
-        buf2[LWS_PRE + 1] = pss->pending_mouse_mode_value;
-        lws_write(wsi, &buf2[LWS_PRE], 2, LWS_WRITE_BINARY);
-        lws_callback_on_writable(wsi);
-        break;
-      }
-
-      if (pss->pending_cursor_blink_send) {
-        pss->pending_cursor_blink_send = false;
-        unsigned char buf3[LWS_PRE + 2];
-        buf3[LWS_PRE] = CURSOR_BLINK;
-        buf3[LWS_PRE + 1] = pss->pending_cursor_blink_value ? 1 : 0;
-        lws_write(wsi, &buf3[LWS_PRE], 2, LWS_WRITE_BINARY);
-        lws_callback_on_writable(wsi);
-        break;
-      }
-
-      if (pss->session != NULL && pss->session->terminal != NULL) {
         char *title = terminal_take_title(pss->session->terminal);
         if (title) {
-          size_t tlen = strlen(title);
-          unsigned char *tmsg = xmalloc(LWS_PRE + 1 + tlen);
-          tmsg[LWS_PRE] = WINDOW_TITLE;
-          memcpy(tmsg + LWS_PRE + 1, title, tlen);
-          lws_write(wsi, tmsg + LWS_PRE, 1 + tlen, LWS_WRITE_BINARY);
-          free(tmsg);
+          state_set_str(pss, "title", title);
           free(title);
-          lws_callback_on_writable(wsi);
-          break;
         }
         uint8_t altv = 0;
         if (terminal_take_altscreen_change(pss->session->terminal, &altv)) {
-          pss->pending_altscreen_send = true;
-          pss->pending_altscreen_value = altv;
+          state_set_bool(pss, "altScreen", altv != 0);
           pss->pending_frame = true;
+        }
+        if (pss->pending_state) {
           lws_callback_on_writable(pss->wsi);
         }
       }
@@ -800,10 +743,26 @@ int callback_tty(struct lws* wsi, enum lws_callback_reasons reason, void* user, 
             if (cwd_str != NULL && strlen(cwd_str) > 0) pss->cwd = strdup(cwd_str);
           }
 
-          struct json_object* app_obj = NULL;
-          if (json_object_object_get_ex(obj, "app", &app_obj)) {
-            const char* app_str = json_object_get_string(app_obj);
-            if (app_str != NULL && strlen(app_str) > 0) pss->app_command = strdup(app_str);
+          struct json_object* appid_obj = NULL;
+          if (json_object_object_get_ex(obj, "appId", &appid_obj)) {
+            const char* appid = json_object_get_string(appid_obj);
+            if (appid) pss->app = config_get_app(appid);
+          }
+          if (!pss->app) pss->app = config_get_first_app();
+
+          struct json_object* cmd_obj = NULL;
+          if (json_object_object_get_ex(obj, "cmd", &cmd_obj)) {
+            const char* cmd_str = json_object_get_string(cmd_obj);
+            if (cmd_str != NULL && strlen(cmd_str) > 0) pss->app_command = strdup(cmd_str);
+          }
+
+          /* legacy fallback: "app" key */
+          if (!pss->app_command) {
+            struct json_object* app_obj = NULL;
+            if (json_object_object_get_ex(obj, "app", &app_obj)) {
+              const char* app_str = json_object_get_string(app_obj);
+              if (app_str != NULL && strlen(app_str) > 0) pss->app_command = strdup(app_str);
+            }
           }
 
           if (!spawn_process(pss, client_session_id, columns, rows)) {
