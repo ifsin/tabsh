@@ -1,5 +1,7 @@
 #include "config.h"
 
+#include "utils.h"
+
 #include <errno.h>
 #include <json.h>
 #include <stdio.h>
@@ -17,7 +19,7 @@ static char *strip_comments(const char *src, size_t len) {
     char *out = malloc(len + 1);
     if (!out) return NULL;
     size_t i = 0, o = 0;
-    bool in_str = false;
+    bool   in_str = false;
     while (i < len) {
         char c = src[i];
         if (in_str) {
@@ -32,7 +34,7 @@ static char *strip_comments(const char *src, size_t len) {
             i++;
         } else {
             if (c == '"') {
-                in_str = true;
+                in_str   = true;
                 out[o++] = c;
                 i++;
             } else if (c == '/' && i + 1 < len && src[i + 1] == '/') {
@@ -57,9 +59,15 @@ static char *read_file(const char *path, size_t *out_len) {
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (sz <= 0) { fclose(f); return NULL; }
+    if (sz <= 0) {
+        fclose(f);
+        return NULL;
+    }
     char *buf = malloc((size_t)sz + 1);
-    if (!buf) { fclose(f); return NULL; }
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
     size_t n = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     buf[n] = '\0';
@@ -81,19 +89,19 @@ static void parse_theme(struct json_object *obj, struct app_theme *t) {
         strncpy(t->cursor, json_object_get_string(o), sizeof(t->cursor) - 1);
         t->has_cursor = true;
     }
-    if (json_object_object_get_ex(obj, "cursorStyle", &o)) {
+    if (json_object_object_get_ex(obj, "cursor_style", &o)) {
         strncpy(t->cursor_style, json_object_get_string(o), sizeof(t->cursor_style) - 1);
         t->has_cursor_style = true;
     }
-    if (json_object_object_get_ex(obj, "cursorBlink", &o)) {
-        t->cursor_blink = json_object_get_boolean(o);
+    if (json_object_object_get_ex(obj, "cursor_blink", &o)) {
+        t->cursor_blink     = json_object_get_boolean(o);
         t->has_cursor_blink = true;
     }
-    if (json_object_object_get_ex(obj, "fontSize", &o)) {
-        t->font_size = json_object_get_int(o);
+    if (json_object_object_get_ex(obj, "font_size", &o)) {
+        t->font_size     = json_object_get_int(o);
         t->has_font_size = true;
     }
-    if (json_object_object_get_ex(obj, "fontFamily", &o)) {
+    if (json_object_object_get_ex(obj, "font_family", &o)) {
         strncpy(t->font_family, json_object_get_string(o), sizeof(t->font_family) - 1);
         t->has_font_family = true;
     }
@@ -159,20 +167,22 @@ static int parse_app(struct json_object *obj, struct app_entry *app) {
         }
     }
 
-    if (json_object_object_get_ex(obj, "theme", &o))
-        parse_theme(o, &app->theme);
+    if (json_object_object_get_ex(obj, "theme", &o)) parse_theme(o, &app->theme);
 
     return 0;
 }
 
 static int try_load(const char *path) {
     size_t len = 0;
-    char *raw = read_file(path, &len);
+    char  *raw = read_file(path, &len);
     if (!raw) return -1; /* not found */
 
     char *src = strip_comments(raw, len);
     free(raw);
-    if (!src) { fprintf(stderr, "tabsh: out of memory\n"); return -1; }
+    if (!src) {
+        fprintf(stderr, "tabsh: out of memory\n");
+        return -1;
+    }
 
     struct json_object *root = json_tokener_parse(src);
     free(src);
@@ -182,22 +192,23 @@ static int try_load(const char *path) {
     }
 
     struct tabsh_config *cfg = g_config;
-    struct json_object *o;
+    struct json_object  *o;
 
     /* server block */
     if (json_object_object_get_ex(root, "server", &o)) {
         struct json_object *v;
-        if (json_object_object_get_ex(o, "port", &v))        cfg->port = json_object_get_int(v);
-        if (json_object_object_get_ex(o, "maxClients", &v))  cfg->max_clients = json_object_get_int(v);
-        if (json_object_object_get_ex(o, "sigCode", &v))     cfg->sig_code = json_object_get_int(v);
-        if (json_object_object_get_ex(o, "terminalType", &v))
+        if (json_object_object_get_ex(o, "port", &v)) cfg->port = json_object_get_int(v);
+        if (json_object_object_get_ex(o, "max_clients", &v)) cfg->max_clients = json_object_get_int(v);
+        if (json_object_object_get_ex(o, "signal", &v)) cfg->sig_code = get_sig(json_object_get_string(v));
+        if (json_object_object_get_ex(o, "terminal_type", &v)) {
             strncpy(cfg->terminal_type, json_object_get_string(v), sizeof(cfg->terminal_type) - 1);
-        if (json_object_object_get_ex(o, "debug", &v))       cfg->debug = json_object_get_int(v);
+            cfg->terminal_type[sizeof(cfg->terminal_type) - 1] = '\0';
+        }
+        if (json_object_object_get_ex(o, "debug", &v)) cfg->debug = json_object_get_int(v);
     }
 
     /* global theme */
-    if (json_object_object_get_ex(root, "theme", &o))
-        parse_theme(o, &cfg->theme);
+    if (json_object_object_get_ex(root, "theme", &o)) parse_theme(o, &cfg->theme);
 
     /* apps array */
     if (json_object_object_get_ex(root, "apps", &o)) {
@@ -267,7 +278,7 @@ void config_set_legacy(const char **argv, int argc) {
         g_config = &g_config_storage;
         memset(g_config, 0, sizeof(*g_config));
     }
-    g_config->loaded = false;
+    g_config->loaded      = false;
     struct app_entry *app = &g_config->apps[0];
     memset(app, 0, sizeof(*app));
     strncpy(app->id, "term", sizeof(app->id) - 1);
@@ -299,13 +310,34 @@ void config_resolve_theme(const struct app_entry *app, struct app_theme *out) {
     if (!app) return;
     /* overlay per-app fields */
     const struct app_theme *t = &app->theme;
-    if (t->has_foreground)  { strncpy(out->foreground, t->foreground, sizeof(out->foreground) - 1); out->has_foreground = true; }
-    if (t->has_background)  { strncpy(out->background, t->background, sizeof(out->background) - 1); out->has_background = true; }
-    if (t->has_cursor)      { strncpy(out->cursor, t->cursor, sizeof(out->cursor) - 1); out->has_cursor = true; }
-    if (t->has_cursor_style){ strncpy(out->cursor_style, t->cursor_style, sizeof(out->cursor_style) - 1); out->has_cursor_style = true; }
-    if (t->has_cursor_blink){ out->cursor_blink = t->cursor_blink; out->has_cursor_blink = true; }
-    if (t->has_font_size)   { out->font_size = t->font_size; out->has_font_size = true; }
-    if (t->has_font_family) { strncpy(out->font_family, t->font_family, sizeof(out->font_family) - 1); out->has_font_family = true; }
+    if (t->has_foreground) {
+        strncpy(out->foreground, t->foreground, sizeof(out->foreground) - 1);
+        out->has_foreground = true;
+    }
+    if (t->has_background) {
+        strncpy(out->background, t->background, sizeof(out->background) - 1);
+        out->has_background = true;
+    }
+    if (t->has_cursor) {
+        strncpy(out->cursor, t->cursor, sizeof(out->cursor) - 1);
+        out->has_cursor = true;
+    }
+    if (t->has_cursor_style) {
+        strncpy(out->cursor_style, t->cursor_style, sizeof(out->cursor_style) - 1);
+        out->has_cursor_style = true;
+    }
+    if (t->has_cursor_blink) {
+        out->cursor_blink     = t->cursor_blink;
+        out->has_cursor_blink = true;
+    }
+    if (t->has_font_size) {
+        out->font_size     = t->font_size;
+        out->has_font_size = true;
+    }
+    if (t->has_font_family) {
+        strncpy(out->font_family, t->font_family, sizeof(out->font_family) - 1);
+        out->has_font_family = true;
+    }
     for (int i = 0; i < 16; i++) {
         if (t->has_palette[i]) {
             strncpy(out->palette[i], t->palette[i], sizeof(out->palette[i]) - 1);
@@ -318,8 +350,12 @@ void config_free(void) {
     if (!g_config) return;
     for (int i = 0; i < g_config->app_count; i++) {
         struct app_entry *app = &g_config->apps[i];
-        for (int j = 0; j < app->argc; j++) free(app->args[j]);
-        for (int j = 0; j < app->envc; j++) { free(app->env_keys[j]); free(app->env_vals[j]); }
+        for (int j = 0; j < app->argc; j++)
+            free(app->args[j]);
+        for (int j = 0; j < app->envc; j++) {
+            free(app->env_keys[j]);
+            free(app->env_vals[j]);
+        }
     }
     g_config = NULL;
 }

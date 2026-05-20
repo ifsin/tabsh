@@ -270,8 +270,8 @@ terminal_t *terminal_create(uint16_t rows, uint16_t cols, void *pss) {
    * carries the "default color" marker (most cells, anything without explicit SGR). */
   VTermState *state = vterm_obtain_state(term->vt);
   VTermColor def_fg, def_bg;
-  vterm_color_rgb(&def_fg, 223, 219, 221);  /* theme.foreground #DFDBDD */
-  vterm_color_rgb(&def_bg, 32, 31, 38);     /* theme.background #201F26 */
+  vterm_color_rgb(&def_fg, 212, 212, 212);  /* theme.foreground #D4D4D4 */
+  vterm_color_rgb(&def_bg, 30, 30, 30);     /* theme.background #1E1E1E */
   vterm_state_set_default_colors(state, &def_fg, &def_bg);
 
   vterm_screen_reset(term->screen, 1);

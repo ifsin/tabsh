@@ -1,6 +1,25 @@
-BasedOnStyle: Google
+BasedOnStyle: LLVM
 Language: Cpp
-ColumnLimit: 120
-IndentWidth: 2
-TabWidth: 2
-UseTab: Never
+ColumnLimit: 0
+IndentWidth: 4
+TabWidth: 4
+AllowShortBlocksOnASingleLine: Always
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AlignConsecutiveDeclarations:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 0
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^".*"'
+    Priority: 1
+  - Regex: '^<.*>'
+    Priority: 2

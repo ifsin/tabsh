@@ -12,45 +12,39 @@ struct app_theme {
     char cursor[32];
     char cursor_style[16]; /* block|underline|bar */
     bool cursor_blink;
-    int font_size;
+    int  font_size;
     char font_family[256];
-    char palette[16][32];  /* ANSI 0-15, empty string = not set */
-    /* which fields are set (for merge logic) */
+    char palette[16][32]; /* ANSI 0-15, empty string = not set */
     bool has_foreground, has_background, has_cursor, has_cursor_style;
     bool has_cursor_blink, has_font_size, has_font_family;
     bool has_palette[16];
 };
 
 struct app_entry {
-    char id[64];
-    char name[128];
-    char command[512];
-    char *args[MAX_APP_ARGS];
-    int argc;
-    char *env_keys[MAX_APP_ENV];
-    char *env_vals[MAX_APP_ENV];
-    int envc;
-    char cwd[512];       /* empty = use server default */
-    char icon[512];      /* empty = use brew resolution */
-    struct app_theme theme;  /* per-app overrides */
+    char             id[64];
+    char             name[128];
+    char             command[512];
+    char            *args[MAX_APP_ARGS];
+    int              argc;
+    char            *env_keys[MAX_APP_ENV];
+    char            *env_vals[MAX_APP_ENV];
+    int              envc;
+    char             cwd[512];  /* empty = use server default */
+    char             icon[512]; /* empty = use brew resolution */
+    struct app_theme theme;     /* per-app overrides */
 };
 
 struct tabsh_config {
-    /* server block */
-    int port;
-    int max_clients;
-    int sig_code;
-    char terminal_type[30];
-    int debug;
-
-    /* global theme */
+    int              port;
+    int              max_clients;
+    int              sig_code;
+    char             terminal_type[30];
+    int              debug;
     struct app_theme theme;
-
-    /* apps */
     struct app_entry apps[MAX_APPS];
-    int app_count;
+    int              app_count;
 
-    bool loaded;  /* true if loaded from file (vs legacy mode) */
+    bool loaded; /* true if loaded from file (vs legacy mode) */
 };
 
 extern struct tabsh_config *g_config;

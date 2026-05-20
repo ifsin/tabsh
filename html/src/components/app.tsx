@@ -32,9 +32,9 @@ const termOptions = {
     fontSize: theme.font_size ?? 13,
     fontFamily: theme.font_family ?? 'Consolas,Liberation Mono,Menlo,Courier,monospace',
     theme: {
-        foreground: theme.foreground ?? '#DFDBDD',
-        background: theme.background ?? '#201F26',
-        cursor: theme.cursor ?? '#FF60FF',
+        foreground: theme.foreground ?? '#D4D4D4',
+        background: theme.background ?? '#1E1E1E',
+        cursor: theme.cursor ?? '#AEAFAD',
     },
 };
 
