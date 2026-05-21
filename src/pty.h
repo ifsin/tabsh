@@ -7,8 +7,8 @@
 #include <uv.h>
 
 typedef struct {
-  char *base;
-  size_t len;
+    char  *base;
+    size_t len;
 } pty_buf_t;
 
 typedef struct pty_impl_s pty_impl_t;  /* opaque, defined per platform */
@@ -18,24 +18,24 @@ typedef void (*pty_read_cb)(pty_process *, pty_buf_t *, bool);
 typedef void (*pty_exit_cb)(pty_process *);
 
 struct pty_process_ {
-  int pid, exit_code, exit_signal;
-  uint16_t columns, rows;
+    int         pid, exit_code, exit_signal;
+    uint16_t    columns, rows;
 
-  char **argv;
-  char **envp;
-  char *cwd;
+    char      **argv;
+    char      **envp;
+    char       *cwd;
 
-  uv_loop_t *loop;
-  uv_async_t async;
-  uv_pipe_t *in;
-  uv_pipe_t *out;
-  bool paused;
+    uv_loop_t  *loop;
+    uv_async_t  async;
+    uv_pipe_t  *in;
+    uv_pipe_t  *out;
+    bool        paused;
 
-  pty_read_cb read_cb;
-  pty_exit_cb exit_cb;
-  void *ctx;
+    pty_read_cb read_cb;
+    pty_exit_cb exit_cb;
+    void       *ctx;
 
-  pty_impl_t *impl;  /* platform-private state */
+    pty_impl_t *impl; /* platform-private state */
 };
 
 /* portable (pty_common.c) */
