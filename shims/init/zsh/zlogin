@@ -1,0 +1,5 @@
+ZDOTDIR="$TABSH_ORIG_ZDOTDIR"
+if [ -f "$ZDOTDIR/.zlogin" ]; then
+  . "$ZDOTDIR/.zlogin"
+fi
+unset TABSH_SHIM_ZDOTDIR TABSH_ORIG_ZDOTDIR

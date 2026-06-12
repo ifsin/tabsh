@@ -1,0 +1,67 @@
+[workspace]
+members = [
+    "client/wasm",
+    "vendor/rio-backend",
+    "vendor/sugarloaf",
+    "vendor/rio-grapheme-width",
+    "vendor/rio-window",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.4.6"
+authors = ["ifsin"]
+edition = "2021"
+repository = "https://github.com/ifsin/tabsh"
+homepage = "https://github.com/ifsin/tabsh"
+readme = "README.md"
+license = "MIT"
+keywords = ["terminal", "wasm", "graphics"]
+rust-version = "1.96.0"
+
+[workspace.dependencies]
+rio-backend        = { path = "vendor/rio-backend",        version = "0.4.6" }
+rio-window         = { path = "vendor/rio-window",         version = "0.4.6", default-features = false }
+rio-grapheme-width = { path = "vendor/rio-grapheme-width", version = "0.4.6" }
+sugarloaf          = { path = "vendor/sugarloaf",          version = "0.4.6" }
+
+raw-window-handle = { version = "0.6.2", features = ["std"] }
+parking_lot = { version = "0.12.5", features = ["nightly", "hardware-lock-elision"] }
+rustc-hash = "2.1.2"
+smallvec = "1.15.1"
+unicode-width = { package = "unicode-width-16", version = "0.1.0" }
+simdutf = "0.7.0"
+base64 = "0.22.1"
+image_rs = { package = "image", version = "0.25.10", default-features = false, features = [
+    "gif", "jpeg", "ico", "png", "pnm", "webp", "bmp",
+] }
+regex = "1.12.3"
+onig = { version = "6.5.1", default-features = false }
+bytemuck = { version = "1.25.0", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+wgpu = "29.0.3"
+libc = "0.2.185"
+smol_str = "0.3.2"
+futures = "0.3.31"
+wasm-bindgen = "0.2.87"
+wasm-bindgen-futures = "0.4.34"
+wasm-bindgen-test = "0.3.42"
+env_logger = "0.11.8"
+console_log = "0.2.2"
+bitflags = "2.9.0"
+iovec = "0.1.4"
+console_error_panic_hook = "0.1.7"
+tracing = "0.1.41"
+objc = { package = "objc-rs", version = "0.3.1" }
+memmap2 = "0.9.5"
+url = "2.5.4"
+criterion = { version = "0.6.0", features = ["html_reports"] }
+dashmap = "6.1.0"
+flate2 = "1.0"
+lazy_static = "1.5"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3

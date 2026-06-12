@@ -1,0 +1,5 @@
+ZDOTDIR="$TABSH_ORIG_ZDOTDIR"
+if [ -f "$ZDOTDIR/.zprofile" ]; then
+  . "$ZDOTDIR/.zprofile"
+fi
+ZDOTDIR="$TABSH_SHIM_ZDOTDIR"

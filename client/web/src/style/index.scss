@@ -1,0 +1,36 @@
+html,
+body {
+    height: 100%;
+    min-height: 100%;
+    margin: 0;
+    overflow: hidden;
+}
+
+#terminal-container {
+    width: auto;
+    height: 100%;
+    margin: 0 auto;
+    padding: 0;
+    .terminal {
+        padding: 5px;
+        height: calc(100% - 10px);
+    }
+}
+
+.scroll-wrap {
+    overflow-y: auto;
+    height: 100%;
+    position: relative;
+    scrollbar-width: none;
+    &::-webkit-scrollbar {
+        display: none;
+    }
+}
+
+.scroll-inner {
+    position: relative;
+}
+
+.term-line {
+    height: var(--cell-h);
+}

@@ -1,0 +1,199 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.1.0)'
+        required: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/web/package-lock.json
+
+      - run: npm ci
+        working-directory: client/web
+
+      - run: make wasm frontend
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: embedded
+          path: server/embedded/
+
+  server:
+    needs: frontend
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: embedded
+          path: server/embedded/
+
+      - name: Install cross-compiler (linux/arm64)
+        if: matrix.goarch == 'arm64' && matrix.goos == 'linux'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
+        run: |
+          cp -R shims server/shims
+          cd server && go build -o ../tabsh-${{ matrix.goos }}-${{ matrix.goarch }} .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabsh-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: tabsh-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  publish:
+    needs: server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tabsh-*
+          merge-multiple: true
+          path: artifacts/
+
+      - name: SHA256SUMS
+        run: cd artifacts && sha256sum tabsh-* > SHA256SUMS
+
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ github.event.inputs.version }}
+          artifacts: artifacts/*
+          draft: false
+          generateReleaseNotes: true
+
+  homebrew:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute SHA256s
+        id: sha
+        shell: bash
+        run: |
+          BASE="https://github.com/ifsin/tabsh/releases/download/v${{ github.event.inputs.version }}"
+          for target in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do
+            sha=$(curl -fsSL "${BASE}/tabsh-${target}" | sha256sum | awk '{print $1}')
+            echo "${target//-/_}=$sha" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: ifsin/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          BASE: https://github.com/ifsin/tabsh/releases/download/v${{ github.event.inputs.version }}
+          darwin_amd64: ${{ steps.sha.outputs.darwin_amd64 }}
+          darwin_arm64: ${{ steps.sha.outputs.darwin_arm64 }}
+          linux_amd64: ${{ steps.sha.outputs.linux_amd64 }}
+          linux_arm64: ${{ steps.sha.outputs.linux_arm64 }}
+        run: |
+          python3 - <<'EOF'
+          import os
+
+          version = os.environ["VERSION"]
+          base    = os.environ["BASE"]
+          shas = {
+            "darwin-amd64": os.environ["darwin_amd64"],
+            "darwin-arm64": os.environ["darwin_arm64"],
+            "linux-amd64":  os.environ["linux_amd64"],
+            "linux-arm64":  os.environ["linux_arm64"],
+          }
+
+          formula = (
+            f'class Tabsh < Formula\n'
+            f'  desc "Terminal tab manager"\n'
+            f'  homepage "https://github.com/ifsin/tabsh"\n'
+            f'  version "{version}"\n'
+            f'  license "MIT"\n'
+            f'\n'
+            f'  on_macos do\n'
+            f'    on_intel do\n'
+            f'      url "{base}/tabsh-darwin-amd64"\n'
+            f'      sha256 "{shas["darwin-amd64"]}"\n'
+            f'    end\n'
+            f'    on_arm do\n'
+            f'      url "{base}/tabsh-darwin-arm64"\n'
+            f'      sha256 "{shas["darwin-arm64"]}"\n'
+            f'    end\n'
+            f'  end\n'
+            f'\n'
+            f'  on_linux do\n'
+            f'    on_intel do\n'
+            f'      url "{base}/tabsh-linux-amd64"\n'
+            f'      sha256 "{shas["linux-amd64"]}"\n'
+            f'    end\n'
+            f'    on_arm do\n'
+            f'      url "{base}/tabsh-linux-arm64"\n'
+            f'      sha256 "{shas["linux-arm64"]}"\n'
+            f'    end\n'
+            f'  end\n'
+            f'\n'
+            f'  def install\n'
+            f'    binary = Dir["tabsh-*"].first\n'
+            f'    bin.install binary => "tabsh"\n'
+            f'  end\n'
+            f'end\n'
+          )
+
+          with open("homebrew-tap/Formula/tabsh.rb", "w") as f:
+            f.write(formula)
+          EOF
+
+      - name: Commit and push
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/tabsh.rb
+          git diff --cached --quiet || git commit -m "tabsh ${{ github.event.inputs.version }}"
+          git push

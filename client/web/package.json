@@ -1,0 +1,30 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "tabsh",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.8.1",
+    "@types/node": "^25.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.46.1",
+    "@typescript-eslint/parser": "^8.46.1",
+    "eslint": "^9.37.0",
+    "eslint-plugin-n": "^17.23.1",
+    "eslint-plugin-prettier": "^5.1.3",
+    "prettier": "^3.6.2",
+    "sass": "^1.71.1",
+    "typescript": "^5.3.3",
+    "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "preact": "^10.19.6"
+  }
+}

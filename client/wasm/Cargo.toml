@@ -1,0 +1,31 @@
+[package]
+name = "tabsh-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly terminal renderer for tabsh"
+repository = "https://github.com/ifsin/tabsh"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rio-backend  = { path = "../../vendor/rio-backend", default-features = false }
+sugarloaf    = { path = "../../vendor/sugarloaf", features = ["wgpu"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+console_error_panic_hook = { workspace = true }
+rustc-hash = { workspace = true }
+js-sys = "0.3"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "HtmlCanvasElement",
+    "KeyboardEvent",
+    "WebSocket",
+    "BinaryType",
+    "Window",
+    "Document",
+    "Performance",
+]

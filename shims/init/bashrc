@@ -1,0 +1,53 @@
+if [ -n "$TABSH_LOGIN" ]; then
+  unset TABSH_LOGIN
+  if [ -f /etc/profile ]; then
+    . /etc/profile
+  fi
+  for __tabsh_f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+    if [ -f "$__tabsh_f" ]; then
+      . "$__tabsh_f"
+      break
+    fi
+  done
+  unset __tabsh_f
+else
+  if [ -f /etc/bash.bashrc ]; then
+    . /etc/bash.bashrc
+  fi
+  if [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc"
+  fi
+fi
+
+if [ -n "$TABSH_SHIM_DIR" ]; then
+  export PATH="$TABSH_SHIM_DIR:$PATH"
+fi
+
+__tabsh_urlencode() {
+  local LC_ALL=C s="$1" out= c i
+  for (( i=0; i<${#s}; i++ )); do
+    c="${s:$i:1}"
+    case "$c" in
+      [a-zA-Z0-9._~/-]) out+="$c" ;;
+      *) out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+__tabsh_preexec_done=1
+__tabsh_preexec() {
+  [ -n "$COMP_LINE" ] && return
+  case "$BASH_COMMAND" in __tabsh_*) return ;; esac
+  [ -n "$__tabsh_preexec_done" ] && return
+  __tabsh_preexec_done=1
+  printf '\e]777;cmd;%s\a' "$(__tabsh_urlencode "$BASH_COMMAND")"
+}
+trap '__tabsh_preexec' DEBUG
+
+__tabsh_osc7() {
+  printf '\e]7;file://%s%s\a' "${HOSTNAME:-$(hostname)}" "$(__tabsh_urlencode "$PWD")"
+  printf '\e]777;cmd;\a'
+  __tabsh_preexec_done=""
+}
+PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }__tabsh_osc7"

@@ -1,0 +1,11 @@
+TABSH_SHIM_ZDOTDIR="$ZDOTDIR"
+ZDOTDIR="${TABSH_ORIG_ZDOTDIR:-$HOME}"
+if [ -f "$ZDOTDIR/.zshenv" ]; then
+  . "$ZDOTDIR/.zshenv"
+fi
+TABSH_ORIG_ZDOTDIR="$ZDOTDIR"
+if [[ -o interactive ]]; then
+  ZDOTDIR="$TABSH_SHIM_ZDOTDIR"
+else
+  unset TABSH_SHIM_ZDOTDIR TABSH_ORIG_ZDOTDIR
+fi

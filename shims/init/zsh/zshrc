@@ -1,0 +1,44 @@
+ZDOTDIR="$TABSH_ORIG_ZDOTDIR"
+if [ -f "$ZDOTDIR/.zshrc" ]; then
+  . "$ZDOTDIR/.zshrc"
+fi
+
+case "$HISTFILE" in
+  "$TABSH_SHIM_ZDOTDIR"/*) HISTFILE="$ZDOTDIR/.zsh_history" ;;
+esac
+
+if [ -n "$TABSH_SHIM_DIR" ]; then
+  export PATH="$TABSH_SHIM_DIR:$PATH"
+fi
+
+__tabsh_urlencode() {
+  local LC_ALL=C s="$1" out= c i
+  for (( i=0; i<${#s}; i++ )); do
+    c="${s:$i:1}"
+    case "$c" in
+      [a-zA-Z0-9._~/-]) out+="$c" ;;
+      *) out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+__tabsh_osc7() {
+  printf '\e]7;file://%s%s\a' "${HOST:-$(hostname)}" "$(__tabsh_urlencode "$PWD")"
+  printf '\e]777;cmd;\a'
+}
+
+__tabsh_preexec() {
+  local expanded="${3:-$1}"
+  printf '\e]777;cmd;%s\a' "$(__tabsh_urlencode "$expanded")"
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd __tabsh_osc7
+add-zsh-hook preexec __tabsh_preexec
+
+if [[ -o login ]]; then
+  ZDOTDIR="$TABSH_SHIM_ZDOTDIR"
+else
+  unset TABSH_SHIM_ZDOTDIR TABSH_ORIG_ZDOTDIR
+fi

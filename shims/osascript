@@ -1,0 +1,14 @@
+#!/bin/sh
+REAL="/usr/bin/osascript"
+SCRIPTS=""; NEXT=0
+for arg in "$@"; do
+  [ "$NEXT" = 1 ] && SCRIPTS="$SCRIPTS $arg" && NEXT=0 && continue
+  [ "$arg" = "-e" ] && NEXT=1
+done
+if echo "$SCRIPTS" | grep -q "display notification"; then
+  BODY=$(echo "$SCRIPTS" | sed -n 's/display notification "\([^"]*\)".*/\1/p')
+  TITLE=$(echo "$SCRIPTS" | sed -n 's/.*with title "\([^"]*\)".*/\1/p')
+  printf '\033]777;notify;%s;%s\007' "${TITLE:-Notification}" "$BODY" > /dev/tty 2>/dev/null
+  exit 0
+fi
+exec "$REAL" "$@"
