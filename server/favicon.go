@@ -192,12 +192,22 @@ func resolveBinaryFormula(bin string) (string, bool) {
 	return "", false
 }
 
+func lookPath(bin string) (string, error) {
+	for _, prefix := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+		p := filepath.Join(prefix, bin)
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return exec.LookPath(bin)
+}
+
 func writeAppIcon(cmd, out string) bool {
 	fields := strings.Fields(cmd)
 	if len(fields) == 0 {
 		return false
 	}
-	bin, err := exec.LookPath(filepath.Base(fields[0]))
+	bin, err := lookPath(filepath.Base(fields[0]))
 	if err != nil {
 		return false
 	}
@@ -241,8 +251,17 @@ func plistValue(plist, key string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+func brewPath() string {
+	for _, p := range []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "brew"
+}
+
 func brewHomepage(formula string) (string, bool) {
-	out, err := exec.Command("brew", "info", "--json=v2", formula).Output()
+	out, err := exec.Command(brewPath(), "info", "--json=v2", formula).Output()
 	if err != nil {
 		return "", false
 	}

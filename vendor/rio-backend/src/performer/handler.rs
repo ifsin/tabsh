@@ -524,29 +524,54 @@ impl Default for SyncState {
 
 #[derive(Debug, Default)]
 pub struct StdSyncHandler {
+    #[cfg(not(target_arch = "wasm32"))]
     timeout: Option<Instant>,
 }
 
 impl StdSyncHandler {
     /// Synchronized update expiration time.
     #[inline]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn sync_timeout(&self) -> Option<Instant> {
         self.timeout
     }
 
     #[inline]
+    #[cfg(target_arch = "wasm32")]
+    pub fn sync_timeout(&self) -> Option<Instant> {
+        None
+    }
+
+    #[inline]
     fn set_timeout(&mut self, duration: Duration) {
-        self.timeout = Some(Instant::now() + duration);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.timeout = Some(Instant::now() + duration);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = duration;
+        }
     }
 
     #[inline]
     fn clear_timeout(&mut self) {
-        self.timeout = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.timeout = None;
+        }
     }
 
     #[inline]
     fn pending_timeout(&self) -> bool {
-        self.timeout.is_some()
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.timeout.is_some()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 }
 
